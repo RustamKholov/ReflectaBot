@@ -17,7 +17,6 @@ FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
 
-# Copy .env file if it exists
 COPY .env* ./
 
 ENTRYPOINT ["dotnet", "ReflectaBot.dll"]
