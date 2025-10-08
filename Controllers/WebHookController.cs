@@ -14,8 +14,8 @@ public class WebHookController : ControllerBase
     public WebHookController(IConfiguration configuration)
     {
         _configuration = configuration;
-        _botClient = new TelegramBotClient((Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN") ?? configuration["Telegram:BotToken"]) ?? string.Empty);;
-        
+        _botClient = new TelegramBotClient((Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN") ?? configuration["Telegram:BotToken"]) ?? string.Empty); ;
+
     }
 
     [HttpPost]
@@ -24,10 +24,11 @@ public class WebHookController : ControllerBase
         if (update.Message?.Chat.Id == null) return Ok();
         var chatId = update.Message.Chat.Id;
         var messageText = update.Message.Text;
+        var user = update.Message.From?.FirstName ?? string.Empty;
         await _botClient.SendMessage(
             chatId: chatId,
-            text: $"Hello from controller, your text: {messageText}");
+            text: $"Hello {user}, your text {messageText}, random number for you: {Random.Shared.Next()}");
         return Ok();
     }
-    
+
 }
