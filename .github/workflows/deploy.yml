@@ -3,32 +3,115 @@ name: Deploy Bot
 on:
     push:
         branches: [main]
+        paths-ignore:
+            - "README.md"
+            - "docs/**"
+            - ".github/workflows/test-connection.yml"
     workflow_dispatch:
+        inputs:
+            force_rebuild:
+                description: "Force rebuild without cache"
+                required: false
+                default: false
+                type: boolean
+
+env:
+    PROJECT_PATH: /home/${{ secrets.SERVER_USER }}/ReflectaBot
 
 jobs:
     deploy:
+        name: Deploy to Server
         runs-on: ubuntu-latest
+        timeout-minutes: 10
+
         steps:
-            - name: Deploy to server
+            - name: Deployment Info
+              run: |
+                  echo "### Deployment Information" >> $GITHUB_STEP_SUMMARY
+                  echo "- **Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+                  echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY  
+                  echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+                  echo "- **Author:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+            - name: Deploy Application
               uses: appleboy/ssh-action@v0.1.7
               with:
                   host: ${{ secrets.SERVER_HOST }}
                   username: ${{ secrets.SERVER_USER }}
                   key: ${{ secrets.SERVER_SSH_KEY }}
+                  port: ${{ secrets.SERVER_PORT || 22 }}
+                  command_timeout: 10m
                   script: |
-                      cd /home/${{ secrets.SERVER_USER }}/ReflectaBot
+                      set -e
 
-                      echo "Pulling changes..."
-                      git pull origin main
+                      echo "Starting deployment at $(date)"
 
+                      # Navigate to project directory
+                      cd ${{ env.PROJECT_PATH }}
+                      echo "Current directory: $(pwd)"
+
+                      # Pull latest changes
+                      echo "Pulling latest changes..."
+                      git fetch origin
+                      git reset --hard origin/main
+
+                      # Verify files exist
+                      if [ ! -f "docker-compose.yml" ]; then
+                        echo "Error: docker-compose.yml not found"
+                        exit 1
+                      fi
+
+                      if [ ! -f "Dockerfile" ]; then
+                        echo "Error: Dockerfile not found"
+                        exit 1
+                      fi
+
+                      # Stop containers
                       echo "Stopping containers..."
-                      docker-compose down
+                      docker-compose down || true
 
-                      echo "Starting containers..."
-                      docker-compose up --build -d
+                      # Build arguments
+                      BUILD_ARGS=""
+                      if [ "${{ github.event.inputs.force_rebuild }}" == "true" ]; then
+                        BUILD_ARGS="--no-cache"
+                        echo "Force rebuilding without cache..."
+                      fi
 
+                      # Start containers
+                      echo "Building and starting containers..."
+                      docker-compose up --build $BUILD_ARGS -d
+
+                      # Wait for startup
+                      echo "Waiting for containers to start..."
+                      sleep 15
+
+                      # Check status
+                      echo "Container status:"
+                      docker-compose ps
+
+                      # Test endpoint
+                      echo "Testing endpoint..."
+                      HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                        -H "Content-Type: application/json" \
+                        -d '{"message":{"chat":{"id":123},"text":"deploy test","from":{"first_name":"Deploy"}}}' \
+                        --connect-timeout 5 --max-time 10 \
+                        http://localhost:5211/api/update || echo "000")
+
+                      echo "Endpoint test: HTTP $HTTP_STATUS"
+
+                      # Cleanup
                       echo "Cleaning up..."
                       docker system prune -f
 
-                      echo "Deployment complete"
-                      docker-compose ps
+                      echo "Deployment completed at $(date)"
+
+            - name: Deployment Summary
+              if: always()
+              run: |
+                  if [ "${{ job.status }}" == "success" ]; then
+                    echo "## Deployment Successful" >> $GITHUB_STEP_SUMMARY
+                    echo "ReflectaBot has been deployed and is running." >> $GITHUB_STEP_SUMMARY
+                  else
+                    echo "## Deployment Failed" >> $GITHUB_STEP_SUMMARY
+                    echo "Check the logs above for error details." >> $GITHUB_STEP_SUMMARY
+                  fi

@@ -1,29 +1,192 @@
-name: Test Connection
+name: Test Connection & Bot
 
 on:
     workflow_dispatch:
+        inputs:
+            test_type:
+                description: "Type of test to run"
+                required: true
+                default: "all"
+                type: choice
+                options:
+                    - "ssh_only"
+                    - "bot_only"
+                    - "all"
 
 jobs:
-    test:
+    test-ssh:
+        name: Test SSH Connection
         runs-on: ubuntu-latest
+        if: ${{ github.event.inputs.test_type == 'ssh_only' || github.event.inputs.test_type == 'all' }}
+
         steps:
-            - name: Test server
+            - name: Connection Info
+              run: |
+                  echo "### Testing SSH Connection" >> $GITHUB_STEP_SUMMARY
+                  echo "- **Server:** \`${{ secrets.SERVER_HOST }}\`" >> $GITHUB_STEP_SUMMARY
+                  echo "- **User:** \`${{ secrets.SERVER_USER }}\`" >> $GITHUB_STEP_SUMMARY
+
+            - name: Test SSH Connection
               uses: appleboy/ssh-action@v0.1.7
               with:
                   host: ${{ secrets.SERVER_HOST }}
                   username: ${{ secrets.SERVER_USER }}
                   key: ${{ secrets.SERVER_SSH_KEY }}
+                  port: ${{ secrets.SERVER_PORT || 22 }}
                   script: |
-                      echo "Testing connection..."
-                      whoami
-                      docker --version
+                      echo "SSH connection successful!"
+                      echo "=================================="
+                      echo "Server Information:"
+                      echo "   User: $(whoami)"
+                      echo "   Home: $HOME"
+                      echo "   OS: $(uname -s)"
+                      echo "   Arch: $(uname -m)"
+                      echo "   Hostname: $(hostname)"
+                      echo ""
+                      echo "Docker Information:"
+                      echo "   Docker version: $(docker --version 2>/dev/null || echo 'Not installed')"
+                      echo "   Docker Compose: $(docker-compose --version 2>/dev/null || echo 'Not installed')"
+                      echo ""
+                      echo "Project Directory Check:"
+                      if [ -d "/home/${{ secrets.SERVER_USER }}/ReflectaBot" ]; then
+                        echo "   ReflectaBot directory exists"
+                        cd /home/${{ secrets.SERVER_USER }}/ReflectaBot
+                        echo "   Directory contents:"
+                        ls -la
+                        echo ""
+                        if [ -f "docker-compose.yml" ]; then
+                          echo "   docker-compose.yml found"
+                        else
+                          echo "   docker-compose.yml not found"
+                        fi
+                        if [ -f ".env" ]; then
+                          echo "   .env file found"
+                        else
+                          echo "   .env file not found"
+                        fi
+                      else
+                        echo "   ReflectaBot directory not found"
+                        echo "   Current location: $(pwd)"
+                      fi
+
+    test-bot:
+        name: Test Bot Endpoint
+        runs-on: ubuntu-latest
+        if: ${{ github.event.inputs.test_type == 'bot_only' || github.event.inputs.test_type == 'all' }}
+        needs: [test-ssh]
+
+        steps:
+            - name: Test Bot Endpoint via SSH
+              uses: appleboy/ssh-action@v0.1.7
+              with:
+                  host: ${{ secrets.SERVER_HOST }}
+                  username: ${{ secrets.SERVER_USER }}
+                  key: ${{ secrets.SERVER_SSH_KEY }}
+                  port: ${{ secrets.SERVER_PORT || 22 }}
+                  script: |
+                      echo "Testing ReflectaBot endpoint..."
+                      echo "=================================="
 
                       cd /home/${{ secrets.SERVER_USER }}/ReflectaBot
-                      ls -la
 
-                      echo "Testing bot endpoint..."
-                      curl -X POST -H "Content-Type: application/json" \
-                        -d '{"message":{"chat":{"id":123},"text":"test","from":{"first_name":"Test"}}}' \
-                        http://localhost:5211/api/update
+                      # Check if containers are running
+                      echo "Container Status:"
+                      docker-compose ps 2>/dev/null || echo "Docker compose not available"
+                      echo ""
 
-                      echo "Test complete"
+                      # Check if port 5211 is listening
+                      echo "Port Check:"
+                      if netstat -tlnp 2>/dev/null | grep -q ":5211 "; then
+                        echo "   Port 5211 is listening"
+                      else
+                        echo "   Port 5211 is not listening"
+                        echo "   All listening ports:"
+                        netstat -tlnp 2>/dev/null | grep LISTEN || ss -tlnp | grep LISTEN
+                      fi
+                      echo ""
+
+                      # Test the endpoint
+                      echo "Testing Bot Endpoint:"
+                      TEST_PAYLOAD='{
+                        "message": {
+                          "chat": {
+                            "id": 123456789
+                          },
+                          "text": "GitHub Actions Test",
+                          "from": {
+                            "first_name": "GitHub",
+                            "id": 987654321
+                          }
+                        }
+                      }'
+
+                      echo "   Sending test request..."
+                      HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+                        -X POST \
+                        -H "Content-Type: application/json" \
+                        -d "$TEST_PAYLOAD" \
+                        --connect-timeout 10 \
+                        --max-time 30 \
+                        http://localhost:5211/api/update || echo "000")
+
+                      echo "   Response Code: $HTTP_CODE"
+
+                      if [ -f /tmp/response.txt ]; then
+                        echo "   Response Body:"
+                        cat /tmp/response.txt
+                      fi
+
+                      case $HTTP_CODE in
+                        200)
+                          echo "   Bot endpoint is working correctly!"
+                          ;;
+                        404)
+                          echo "   Endpoint not found (404)"
+                          echo "   Check if the route is correct: /api/update"
+                          ;;
+                        500)
+                          echo "   Internal server error (500)"
+                          echo "   Check bot token configuration"
+                          ;;
+                        000)
+                          echo "   Connection failed"
+                          echo "   Check if service is running on port 5211"
+                          ;;
+                        *)
+                          echo "   Unexpected response code: $HTTP_CODE"
+                          ;;
+                      esac
+
+                      echo ""
+                      echo "Additional Diagnostics:"
+
+                      # Check recent logs
+                      if command -v docker-compose >/dev/null 2>&1; then
+                        echo "   Recent container logs:"
+                        docker-compose logs --tail=10 reflectabot 2>/dev/null || echo "   No logs available"
+                      fi
+
+                      # Check if .env contains bot token
+                      if [ -f .env ]; then
+                        if grep -q "TELEGRAM_BOT_TOKEN" .env; then
+                          echo "   Bot token found in .env"
+                        else
+                          echo "   Bot token not found in .env"
+                        fi
+                      fi
+
+            - name: Test Summary
+              if: always()
+              run: |
+                  echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+
+                  if [ "${{ job.status }}" == "success" ]; then
+                    echo "### All Tests Passed" >> $GITHUB_STEP_SUMMARY
+                    echo "- SSH connection is working" >> $GITHUB_STEP_SUMMARY
+                    echo "- Bot endpoint is responding" >> $GITHUB_STEP_SUMMARY
+                    echo "- Ready for deployment!" >> $GITHUB_STEP_SUMMARY
+                  else
+                    echo "### Some Tests Failed" >> $GITHUB_STEP_SUMMARY
+                    echo "Check the logs above for detailed error information." >> $GITHUB_STEP_SUMMARY
+                  fi
