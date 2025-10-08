@@ -1,27 +1,23 @@
-FROM node:18-alpine
-
-# Set working directory
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
 WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy source code
-COPY . .
-
-# Create non-root user for security
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nextjs -u 1001
-
-# Change ownership of the app directory
-RUN chown -R nextjs:nodejs /app
-USER nextjs
-
-# Expose port 5211
 EXPOSE 5211
 
-# Start the application
-CMD ["npm", "start"]
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY ["ReflectaBot.csproj", "."]
+RUN dotnet restore "ReflectaBot.csproj"
+COPY . .
+WORKDIR "/src"
+RUN dotnet build "ReflectaBot.csproj" -c Release -o /app/build
+
+FROM build AS publish
+RUN dotnet publish "ReflectaBot.csproj" -c Release -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+
+# Copy .env file if it exists
+COPY .env* ./
+
+ENTRYPOINT ["dotnet", "ReflectaBot.dll"]
