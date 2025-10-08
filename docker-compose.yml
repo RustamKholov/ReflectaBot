@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  reflectabot:
+    build: .
+    ports:
+      - "5211:5211"
+    environment:
+      - NODE_ENV=production
+      - PORT=5211
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5211/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

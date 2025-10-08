@@ -21,14 +21,12 @@ public class WebHookController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Post([FromBody] Update update)
     {
-        if (update.Message?.Chat.Id != null)
-        {
-            var chatId = update.Message.Chat.Id;
-            var messageText = update.Message.Text;
-            await _botClient.SendMessage(
-                chatId: chatId,
-                text: $"Hello from controller, your text: {messageText}");
-        }
+        if (update.Message?.Chat.Id == null) return Ok();
+        var chatId = update.Message.Chat.Id;
+        var messageText = update.Message.Text;
+        await _botClient.SendMessage(
+            chatId: chatId,
+            text: $"Hello from controller, your text: {messageText}");
         return Ok();
     }
     
