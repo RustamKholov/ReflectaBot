@@ -1,6 +1,6 @@
 services:
   reflectabot:
-    build: .
+    build: ./ReflectaBot
     ports:
       - "5211:5211"
     environment:
