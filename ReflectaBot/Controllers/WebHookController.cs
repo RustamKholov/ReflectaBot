@@ -1,90 +1,42 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using ReflectaBot.Models;
+using ReflectaBot.Services;
 using Telegram.Bot;
+using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 
 namespace ReflectaBot.Controllers;
 
 [ApiController]
 [Route("api/update")]
-public class WebHookController : ControllerBase
+public class WebHookController(IOptions<TelegramBotConfiguration> BotConfig) : ControllerBase
 {
-    private readonly IConfiguration _configuration;
-    private readonly TelegramBotClient _botClient;
 
-    public WebHookController(IConfiguration configuration)
+    [HttpGet("setWebhook")]
+    public async Task<string> SetWebHook([FromServices] ITelegramBotClient telegramBot, CancellationToken ct)
     {
-        _configuration = configuration;
-        _botClient = new TelegramBotClient((Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN") ?? configuration["Telegram:BotToken"]) ?? string.Empty); ;
-
+        var webhookUrl = BotConfig.Value.WebhookUrl.AbsoluteUri;
+        await telegramBot.SetWebhook(webhookUrl, allowedUpdates: [], secretToken: BotConfig.Value.SecretToken, cancellationToken: ct);
+        return $"Webhook set to {webhookUrl}";
     }
 
     [HttpPost]
-    public async Task<IActionResult> Post([FromBody] Update update)
+    public async Task<IActionResult> Post([FromBody] Update update, [FromServices] ITelegramBotClient botClient, [FromServices] IUpdateHandler updateHandlerService, CancellationToken ct)
     {
-        if (update.Message?.Chat.Id == null) return Ok();
-
-        var chatId = update.Message.Chat.Id;
-        var messageText = update.Message.Text?.ToLower() ?? "";
-        var user = update.Message.From?.FirstName ?? "Unknown";
-
-        string response = messageText switch
+        if (Request.Headers["X-Telegram-Bot-Api-Secret-Token"] != BotConfig.Value.SecretToken)
         {
-            "/start" => $"Welcome {user}! 🤖 Try these commands:\n" +
-                       "/joke - Get a random joke\n" +
-                       "/flip - Flip a coin\n" +
-                       "/roll - Roll a dice\n" +
-                       "/time - Get current server time\n" +
-                       "/fact - Random fun fact",
-
-            "/joke" => GetRandomJoke(),
-            "/flip" => Random.Shared.Next(2) == 0 ? "🪙 Heads!" : "🪙 Tails!",
-            "/roll" => $"🎲 You rolled: {Random.Shared.Next(1, 7)}",
-            "/time" => $"⏰ Server time: {DateTime.Now:yyyy-MM-dd HH:mm:ss} UTC",
-            "/fact" => GetRandomFact(),
-
-            var text when text.Contains("hello") || text.Contains("hi") =>
-                $"Hello {user}! 👋 Nice to meet you!",
-
-            var text when text.Contains("weather") =>
-                "🌤️ I can't check weather yet, but it's always sunny in the server room!",
-
-            var text when text.Contains("deploy") =>
-                "🚀 Deployment successful! I'm running the latest version!",
-
-            _ => $"Hello {user}! You said: '{update.Message.Text}'\n" +
-                 $"🎲 Random number: {Random.Shared.Next(1, 100)}\n" +
-                 $"💬 Message ID: {update.Message.MessageId}\n" +
-                 $"📅 Time: {DateTime.Now:HH:mm:ss}"
-        };
-
-        await _botClient.SendMessage(chatId: chatId, text: response);
+            return Forbid();
+        }
+        try
+        {
+            await updateHandlerService.HandleUpdateAsync(botClient, update, ct);
+        }
+        catch (Exception ex)
+        {
+            await updateHandlerService.HandleErrorAsync(botClient, ex, HandleErrorSource.HandleUpdateError, ct);
+        }
         return Ok();
-    }
-
-    private static string GetRandomJoke()
-    {
-        var jokes = new[]
-        {
-        "Why do programmers prefer dark mode? Because light attracts bugs! 🐛",
-        "How many programmers does it take to change a light bulb? None, that's a hardware problem! 💡",
-        "Why did the developer go broke? Because he used up all his cache! 💸",
-        "What's a programmer's favorite hangout place? Foo Bar! 🍺",
-        "Why do Java developers wear glasses? Because they don't C#! 👓"
-    };
-        return jokes[Random.Shared.Next(jokes.Length)];
-    }
-
-    private static string GetRandomFact()
-    {
-        var facts = new[]
-        {
-        "🐙 Octopuses have three hearts and blue blood!",
-        "🍯 Honey never spoils - archaeologists have found edible honey in ancient Egyptian tombs!",
-        "🌙 A day on Venus is longer than its year!",
-        "🐧 Penguins have knees, they're just hidden under their feathers!",
-        "🧠 Your brain uses about 20% of your body's total energy!"
-    };
-        return facts[Random.Shared.Next(facts.Length)];
     }
 
 }
