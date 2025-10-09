@@ -10,14 +10,17 @@ namespace ReflectaBot.Controllers;
 
 [ApiController]
 [Route("api/update")]
-public class WebHookController(IOptions<TelegramBotConfiguration> BotConfig) : ControllerBase
+public class WebHookController(IOptions<TelegramBotConfiguration> BotConfig, ILogger<WebHookController> logger) : ControllerBase
 {
 
     [HttpGet("setWebhook")]
     public async Task<string> SetWebHook([FromServices] ITelegramBotClient telegramBot, CancellationToken ct)
     {
+
         var webhookUrl = BotConfig.Value.WebhookUrl.AbsoluteUri;
+
         await telegramBot.SetWebhook(webhookUrl, allowedUpdates: [], secretToken: BotConfig.Value.SecretToken, cancellationToken: ct);
+        logger.LogInformation("Webhook set to {0}", webhookUrl);
         return $"Webhook set to {webhookUrl}";
     }
 
