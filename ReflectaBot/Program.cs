@@ -4,6 +4,7 @@ using Microsoft.OpenApi.Models;
 using ReflectaBot.Models;
 using ReflectaBot.Services;
 using Telegram.Bot;
+using Telegram.Bot.Polling;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,7 +39,7 @@ builder.Services.Configure<TelegramBotConfiguration>(options =>
 builder.Services.AddHttpClient("tgwebhook").RemoveAllLoggers().AddTypedClient<ITelegramBotClient>(
     httpClient => new TelegramBotClient((Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN")) ?? builder.Configuration["Telegram:BotToken"] ?? string.Empty, httpClient));
 
-builder.Services.AddSingleton<UpdateHandler>();
+builder.Services.AddSingleton<IUpdateHandler, UpdateHandler>();
 
 
 builder.Services.AddControllers();
