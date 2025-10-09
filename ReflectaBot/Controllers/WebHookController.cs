@@ -24,9 +24,13 @@ public class WebHookController(IOptions<TelegramBotConfiguration> BotConfig) : C
     [HttpPost]
     public async Task<IActionResult> Post([FromBody] Update update, [FromServices] ITelegramBotClient botClient, [FromServices] IUpdateHandler updateHandlerService, CancellationToken ct)
     {
-        if (Request.Headers["X-Telegram-Bot-Api-Secret-Token"] != BotConfig.Value.SecretToken)
+        if (!string.IsNullOrEmpty(BotConfig.Value.SecretToken))
         {
-            return Forbid();
+            var receivedToken = Request.Headers["X-Telegram-Bot-Api-Secret-Token"].FirstOrDefault();
+            if (receivedToken != BotConfig.Value.SecretToken)
+            {
+                return Unauthorized("Invalid secret token");
+            }
         }
         try
         {
