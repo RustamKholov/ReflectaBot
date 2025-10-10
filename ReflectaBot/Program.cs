@@ -30,7 +30,7 @@ Log.Logger = new LoggerConfiguration()
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog();
-
+await TestElasticsearchConnection();
 try
 {
     Log.Information("Starting up ReflectaBot.....");
@@ -92,3 +92,39 @@ finally
     Log.CloseAndFlush();
 }
 
+static async Task TestElasticsearchConnection()
+{
+    try
+    {
+        var elasticPassword = Environment.GetEnvironmentVariable("ELASTIC_PASSWORD");
+        var elasticUri = "http://localhost:9200";
+
+        using var httpClient = new HttpClient();
+
+        if (!string.IsNullOrEmpty(elasticPassword))
+        {
+            var credentials = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"elastic:{elasticPassword}"));
+            httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
+        }
+
+        var response = await httpClient.GetAsync(elasticUri);
+
+        if (response.IsSuccessStatusCode)
+        {
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"✅ Elasticsearch connection test successful");
+
+            // Test if we can create an index
+            var indexResponse = await httpClient.GetAsync($"{elasticUri}/reflectabot-logs-*/_search?size=0");
+            Console.WriteLine($"🔍 Index search test: {indexResponse.StatusCode}");
+        }
+        else
+        {
+            Console.WriteLine($"❌ Elasticsearch connection test failed: {response.StatusCode} - {response.ReasonPhrase}");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"❌ Elasticsearch connection test error: {ex.Message}");
+    }
+}
