@@ -8,11 +8,12 @@ using Telegram.Bot.Types;
 
 namespace ReflectaBot.Services
 {
-    public class UpdateHandler : IUpdateHandler
+    public class UpdateHandler(ILogger<UpdateHandler> logger) : IUpdateHandler
     {
         public Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source, CancellationToken cancellationToken)
         {
-            Console.WriteLine($"Error: {exception.Message}");
+            logger.LogError(exception, "An error occurred while handling update from source {Source}: {ErrorMessage}",
+                source, exception.Message);
             return Task.CompletedTask;
         }
 
@@ -24,8 +25,22 @@ namespace ReflectaBot.Services
             var messageText = update.Message.Text?.ToLower() ?? "";
             var user = update.Message.From?.FirstName ?? "Unknown";
 
+            logger.LogInformation("Processing message from user {User} in chat {ChatId}: {MessageText}",
+                            user, chatId, messageText);
+
             string response = ProcessMessage(messageText, user, update.Message);
-            await botClient.SendMessage(chatId: chatId, text: response, cancellationToken: cancellationToken);
+            
+            try
+            {
+                await botClient.SendMessage(chatId: chatId, text: response, cancellationToken: cancellationToken);
+                logger.LogDebug("Response sent successfully to chat {ChatId}", chatId);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to send message to chat {ChatId}: {ErrorMessage}",
+                    chatId, ex.Message);
+                throw;
+            }
         }
 
         public string ProcessMessage(string messageText, string user, Message? message = null)
