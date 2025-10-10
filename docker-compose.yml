@@ -10,6 +10,8 @@ services:
       - TELEGRAM_SECRET_TOKEN=${TELEGRAM_SECRET_TOKEN}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    networks:
+      - elk
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs

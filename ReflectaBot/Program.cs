@@ -16,7 +16,7 @@ else
 {
     Env.Load();
 }
-var elasticUri = "http://elasticsearch:9200";
+var elasticUri = "http://docker-elk-elasticsearch-1:9200";
 var elasticPassword = Environment.GetEnvironmentVariable("ELASTIC_PASSWORD");
 Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Debug()
@@ -101,7 +101,8 @@ static async Task TestElasticsearchConnection()
     try
     {
         var elasticPassword = Environment.GetEnvironmentVariable("ELASTIC_PASSWORD");
-        var elasticUri = "http://localhost:9200";
+        // Use the same URI as the main configuration
+        var elasticUri = "http://docker-elk-elasticsearch-1:9200";
 
         Console.WriteLine($"🔍 Testing connection with:");
         Console.WriteLine($"   URI: {elasticUri}");
@@ -113,7 +114,6 @@ static async Task TestElasticsearchConnection()
         if (!string.IsNullOrEmpty(elasticPassword))
         {
             var credentials = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"elastic:{elasticPassword}"));
-            Console.WriteLine($"🔍 Base64 credentials: {credentials}");
             httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
         }
         else
@@ -132,7 +132,6 @@ static async Task TestElasticsearchConnection()
             Console.WriteLine($"✅ Elasticsearch connection test successful");
             Console.WriteLine($"📄 Response: {content.Substring(0, Math.Min(200, content.Length))}...");
 
-            // Test index search
             var indexResponse = await httpClient.GetAsync($"{elasticUri}/reflectabot-logs-*/_search?size=0");
             Console.WriteLine($"🔍 Index search test: {indexResponse.StatusCode}");
         }
