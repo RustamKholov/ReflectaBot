@@ -7,6 +7,9 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_URLS=http://+:5211
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_SECRET_TOKEN=${TELEGRAM_SECRET_TOKEN}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs

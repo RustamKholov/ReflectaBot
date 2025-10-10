@@ -16,6 +16,7 @@ else
 {
     Env.Load();
 }
+var elasticUri = "http://elasticsearch:9200";
 var elasticPassword = Environment.GetEnvironmentVariable("ELASTIC_PASSWORD");
 Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Debug()
@@ -23,7 +24,7 @@ Log.Logger = new LoggerConfiguration()
                 .WriteTo.File("logs/reflectabot-.txt",
                     rollingInterval: RollingInterval.Day,
                     retainedFileCountLimit: 7)
-                .WriteTo.Elasticsearch(new Serilog.Sinks.Elasticsearch.ElasticsearchSinkOptions(new Uri("http://localhost:9200"))
+                .WriteTo.Elasticsearch(new Serilog.Sinks.Elasticsearch.ElasticsearchSinkOptions(new Uri(elasticUri))
                 {
                     AutoRegisterTemplate = true,
                     IndexFormat = "reflectabot-logs-{0:yyyy.MM.dd}",
