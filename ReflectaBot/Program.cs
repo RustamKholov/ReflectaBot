@@ -34,7 +34,6 @@ Log.Logger = new LoggerConfiguration()
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog();
-await TestElasticsearchConnection();
 try
 {
     Log.Information("Starting up ReflectaBot.....");
@@ -94,57 +93,4 @@ catch (Exception ex)
 finally
 {
     Log.CloseAndFlush();
-}
-
-static async Task TestElasticsearchConnection()
-{
-    try
-    {
-        var elasticPassword = Environment.GetEnvironmentVariable("ELASTIC_PASSWORD");
-        // Use the same URI as the main configuration
-        var elasticUri = "http://docker-elk-elasticsearch-1:9200";
-
-        Console.WriteLine($"🔍 Testing connection with:");
-        Console.WriteLine($"   URI: {elasticUri}");
-        Console.WriteLine($"   Password: '{elasticPassword}' (length: {elasticPassword?.Length ?? 0})");
-
-        using var httpClient = new HttpClient();
-        httpClient.Timeout = TimeSpan.FromSeconds(10);
-
-        if (!string.IsNullOrEmpty(elasticPassword))
-        {
-            var credentials = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"elastic:{elasticPassword}"));
-            httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
-        }
-        else
-        {
-            Console.WriteLine("❌ No password provided - testing without authentication");
-        }
-
-        var response = await httpClient.GetAsync(elasticUri);
-
-        Console.WriteLine($"🔍 Response status: {response.StatusCode}");
-        Console.WriteLine($"🔍 Response reason: {response.ReasonPhrase}");
-
-        if (response.IsSuccessStatusCode)
-        {
-            var content = await response.Content.ReadAsStringAsync();
-            Console.WriteLine($"✅ Elasticsearch connection test successful");
-            Console.WriteLine($"📄 Response: {content.Substring(0, Math.Min(200, content.Length))}...");
-
-            var indexResponse = await httpClient.GetAsync($"{elasticUri}/reflectabot-logs-*/_search?size=0");
-            Console.WriteLine($"🔍 Index search test: {indexResponse.StatusCode}");
-        }
-        else
-        {
-            var errorContent = await response.Content.ReadAsStringAsync();
-            Console.WriteLine($"❌ Elasticsearch connection test failed: {response.StatusCode} - {response.ReasonPhrase}");
-            Console.WriteLine($"📄 Error response: {errorContent}");
-        }
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"❌ Elasticsearch connection test error: {ex.Message}");
-        Console.WriteLine($"📄 Full exception: {ex}");
-    }
 }

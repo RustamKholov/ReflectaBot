@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Telegram.Bot;
+using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 
@@ -10,11 +11,12 @@ namespace ReflectaBot.Services
 {
     public class UpdateHandler(ILogger<UpdateHandler> logger) : IUpdateHandler
     {
-        public Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source, CancellationToken cancellationToken)
+        public async Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source, CancellationToken cancellationToken)
         {
-            logger.LogError(exception, "An error occurred while handling update from source {Source}: {ErrorMessage}",
-                source, exception.Message);
-            return Task.CompletedTask;
+            logger.LogInformation("HandleError: {Exception}", exception);
+            // Cooldown in case of network connection error
+            if (exception is RequestException)
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
         }
 
         public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
@@ -29,7 +31,7 @@ namespace ReflectaBot.Services
                             user, chatId, messageText);
 
             string response = ProcessMessage(messageText, user, update.Message);
-            
+
             try
             {
                 await botClient.SendMessage(chatId: chatId, text: response, cancellationToken: cancellationToken);
