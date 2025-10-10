@@ -3,6 +3,7 @@ services:
     build: ./ReflectaBot
     ports:
       - "5211:5211"
+    network_mode: "host"
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_URLS=http://+:5211
@@ -10,8 +11,6 @@ services:
       - TELEGRAM_SECRET_TOKEN=${TELEGRAM_SECRET_TOKEN}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
-    networks:
-      - elk
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs

@@ -16,7 +16,7 @@ else
 {
     Env.Load();
 }
-var elasticUri = "http://docker-elk-elasticsearch-1:9200";
+var elasticUri = "http://localhost:9200";
 var elasticPassword = Environment.GetEnvironmentVariable("ELASTIC_PASSWORD");
 Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Debug()
