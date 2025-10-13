@@ -88,17 +88,35 @@ namespace ReflectaBot.Services
 
         private async Task OnCallbackQuery(CallbackQuery callbackQuery)
         {
+            await bot.AnswerCallbackQuery(callbackQuery.Id);
 
+            string user = callbackQuery.From?.FirstName ?? "Unknown";
+
+            logger.LogInformation("Received callback query from {User}: {Data}", user, callbackQuery.Data);
+
+            if (callbackQuery.Message is { } message && callbackQuery.Data is { } data)
+            {
+                string responseText = data switch
+                {
+                    "joke" => ProcessMessage("/joke", user),
+                    "dice" => ProcessMessage("/roll", user),
+                    "fact" => ProcessMessage("/fact", user),
+                    "coin" => ProcessMessage("/flip", user),
+                    "time" => ProcessMessage("/time", user),
+                    _ => "Unknown command!"
+                };
+
+                Message sentMessage = await bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: message.MessageId,
+                    text: responseText
+                );
+
+                logger.LogInformation("Response sent to {User} with message ID: {MessageId}", user, sentMessage.MessageId);
+            }
         }
         private async Task OnInlineQuery(InlineQuery inlineQuery)
         {
-            logger.LogInformation("Received inline query from: {InlineQueryFromId}", inlineQuery.From.Id);
-
-            InlineQueryResult[] results = [ // displayed result
-                new InlineQueryResultArticle("1", "Telegram.Bot", new InputTextMessageContent("hello")),
-                new InlineQueryResultArticle("2", "is the best", new InputTextMessageContent("world"))
-            ];
-            await bot.AnswerInlineQuery(inlineQuery.Id, results, cacheTime: 0, isPersonal: true);
         }
         private async Task OnChosenInlineResult(ChosenInlineResult result)
         {
