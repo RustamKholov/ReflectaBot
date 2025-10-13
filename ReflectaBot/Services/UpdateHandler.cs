@@ -42,7 +42,7 @@ namespace ReflectaBot.Services
             logger.LogInformation("Receive message type: {MessageType}", message.Type);
             if (message.Text is not { } messageText)
                 return;
-            Message msg = await (messageText.Split(' ')[0] switch
+            Message msg = await (messageText switch
             {
                 "/start" => SendStart(message),
                 "Get a joke" => bot.SendMessage(message.Chat, ProcessMessage("/joke", message.From?.FirstName ?? "Unknown")),
