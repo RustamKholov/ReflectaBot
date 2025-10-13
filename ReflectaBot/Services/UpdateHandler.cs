@@ -47,6 +47,7 @@ namespace ReflectaBot.Services
             Message msg = await (messageText switch
             {
                 "/start" => SendStart(message),
+                "/clear" => ClearKeyboard(message),
                 "joke" => bot.SendMessage(message.Chat, ProcessMessage("/joke", user)),
                 "dice" => bot.SendMessage(message.Chat, ProcessMessage("/roll", user)),
                 "fact" => bot.SendMessage(message.Chat, ProcessMessage("/fact", user)),
@@ -102,6 +103,14 @@ namespace ReflectaBot.Services
 
                 logger.LogInformation("Response sent to {User} with message ID: {MessageId}", user, sentMessage.MessageId);
             }
+        }
+        private async Task<Message> ClearKeyboard(Message message)
+        {
+            return await bot.SendMessage(
+                chatId: message.Chat.Id,
+                text: "🧹 Keyboard removed!",
+                replyMarkup: new ReplyKeyboardRemove()
+            );
         }
         private async Task OnInlineQuery(InlineQuery inlineQuery)
         {
