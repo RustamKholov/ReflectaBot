@@ -6,10 +6,11 @@ using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.ReplyMarkups;
 
 namespace ReflectaBot.Services
 {
-    public class UpdateHandler(ILogger<UpdateHandler> logger) : IUpdateHandler
+    public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger) : IUpdateHandler
     {
         public async Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source, CancellationToken cancellationToken)
         {
@@ -21,29 +22,82 @@ namespace ReflectaBot.Services
 
         public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
         {
-            if (update.Message?.Chat.Id == null) return;
-
-            var chatId = update.Message.Chat.Id;
-            var messageText = update.Message.Text?.ToLower() ?? "";
-            var user = update.Message.From?.FirstName ?? "Unknown";
-
-            logger.LogInformation("Processing message from user {User} in chat {ChatId}: {MessageText}",
-                            user, chatId, messageText);
-
-            string response = ProcessMessage(messageText, user, update.Message);
-
-            try
+            cancellationToken.ThrowIfCancellationRequested();
+            await (update switch
             {
-                await botClient.SendMessage(chatId: chatId, text: response, cancellationToken: cancellationToken);
-                logger.LogDebug("Response sent successfully to chat {ChatId}", chatId);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to send message to chat {ChatId}: {ErrorMessage}",
-                    chatId, ex.Message);
-                throw;
-            }
+                { Message: { } message } => OnMessage(message),
+                { EditedMessage: { } message } => OnMessage(message),
+                { CallbackQuery: { } callbackQuery } => OnCallbackQuery(callbackQuery),
+                { InlineQuery: { } inlineQuery } => OnInlineQuery(inlineQuery),
+                { ChosenInlineResult: { } chosenInlineResult } => OnChosenInlineResult(chosenInlineResult),
+                { Poll: { } poll } => OnPoll(poll),
+                { PollAnswer: { } pollAnswer } => OnPollAnswer(pollAnswer),
+                _ => UnknownUpdateHandlerAsync(update)
+            });
         }
+
+
+        private async Task OnMessage(Message message)
+        {
+            logger.LogInformation("Receive message type: {MessageType}", message.Type);
+            if (message.Text is not { } messageText)
+                return;
+            Message msg = await (messageText.Split(' ')[0] switch
+            {
+                "/start" => SendStart(message),
+                "Get a joke" => bot.SendMessage(message.Chat, ProcessMessage("/joke", message.From?.FirstName ?? "Unknown")),
+                "Roll the dice" => bot.SendMessage(message.Chat, ProcessMessage("/roll", message.From?.FirstName ?? "Unknown")),
+                "Get a fun fact" => bot.SendMessage(message.Chat, ProcessMessage("/fact", message.From?.FirstName ?? "Unknown")),
+                "Flip a coin" => bot.SendMessage(message.Chat, ProcessMessage("/flip", message.From?.FirstName ?? "Unknown")),
+                "Get a server time" => bot.SendMessage(message.Chat, ProcessMessage("/time", message.From?.FirstName ?? "Unknown")),
+                _ => Usage(message)
+            });
+            logger.LogInformation("The message was sent with id: {SentMessageId}", msg.Id);
+        }
+        async Task<Message> SendStart(Message message)
+        {
+            return await bot.SendMessage(chatId: message.Chat.Id, text: "Welcome to ReflectaBot!", replyMarkup: new ReplyKeyboardMarkup(
+            [
+                ["Get a joke", "Roll the dice"],
+                ["Get a fun fact", "Flip a coin"],
+                ["Get a server time"]
+            ]));
+        }
+
+        async Task<Message> Usage(Message message)
+        {
+            const string usage = """
+            /start - start bot
+            """;
+            return await bot.SendMessage(message.Chat, usage);
+        }
+
+        private async Task OnCallbackQuery(CallbackQuery callbackQuery)
+        {
+
+        }
+        private async Task OnInlineQuery(InlineQuery inlineQuery)
+        {
+
+        }
+        private async Task OnChosenInlineResult(ChosenInlineResult result)
+        {
+
+        }
+        private async Task OnPoll(Poll poll)
+        {
+
+        }
+        private async Task OnPollAnswer(PollAnswer pollAnswer)
+        {
+
+        }
+        private Task UnknownUpdateHandlerAsync(Update update)
+        {
+            logger.LogInformation("Unknown update type: {UpdateType}", update.Type);
+            return Task.CompletedTask;
+        }
+
 
         public string ProcessMessage(string messageText, string user, Message? message = null)
         {
