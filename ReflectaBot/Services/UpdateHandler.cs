@@ -103,13 +103,6 @@ namespace ReflectaBot.Services
         {
             return messageText switch
             {
-                "/start" => $"Welcome {user}! 🤖 Try these commands:\n" +
-                           "/joke - Get a random joke\n" +
-                           "/flip - Flip a coin\n" +
-                           "/roll - Roll a dice\n" +
-                           "/time - Get current server time\n" +
-                           "/fact - Random fun fact",
-
                 "/joke" => GetRandomJoke(),
                 "/flip" => Random.Shared.Next(2) == 0 ? "🪙 Heads!" : "🪙 Tails!",
                 "/roll" => $"🎲 You rolled: {Random.Shared.Next(1, 7)}",
