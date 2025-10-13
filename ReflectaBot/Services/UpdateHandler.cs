@@ -6,6 +6,7 @@ using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.InlineQueryResults;
 using Telegram.Bot.Types.ReplyMarkups;
 
 namespace ReflectaBot.Services
@@ -42,26 +43,39 @@ namespace ReflectaBot.Services
             logger.LogInformation("Receive message type: {MessageType}", message.Type);
             if (message.Text is not { } messageText)
                 return;
+            string user = message.From?.FirstName ?? "Unknown";
             Message msg = await (messageText switch
             {
                 "/start" => SendStart(message),
-                "Get a joke" => bot.SendMessage(message.Chat, ProcessMessage("/joke", message.From?.FirstName ?? "Unknown")),
-                "Roll the dice" => bot.SendMessage(message.Chat, ProcessMessage("/roll", message.From?.FirstName ?? "Unknown")),
-                "Get a fun fact" => bot.SendMessage(message.Chat, ProcessMessage("/fact", message.From?.FirstName ?? "Unknown")),
-                "Flip a coin" => bot.SendMessage(message.Chat, ProcessMessage("/flip", message.From?.FirstName ?? "Unknown")),
-                "Get a server time" => bot.SendMessage(message.Chat, ProcessMessage("/time", message.From?.FirstName ?? "Unknown")),
+                "joke" => bot.SendMessage(message.Chat, ProcessMessage("/joke", user)),
+                "dice" => bot.SendMessage(message.Chat, ProcessMessage("/roll", user)),
+                "fact" => bot.SendMessage(message.Chat, ProcessMessage("/fact", user)),
+                "coin" => bot.SendMessage(message.Chat, ProcessMessage("/flip", user)),
+                "time" => bot.SendMessage(message.Chat, ProcessMessage("/time", user)),
                 _ => Usage(message)
             });
             logger.LogInformation("The message was sent with id: {SentMessageId}", msg.Id);
         }
         async Task<Message> SendStart(Message message)
         {
-            return await bot.SendMessage(chatId: message.Chat.Id, text: "Welcome to ReflectaBot!", replyMarkup: new ReplyKeyboardMarkup(
-            [
-                ["Get a joke", "Roll the dice"],
-                ["Get a fun fact", "Flip a coin"],
-                ["Get a server time"]
-            ]));
+            return await bot.SendMessage(
+                chatId: message.Chat.Id,
+                text: "What would you like to do?",
+                replyMarkup: new InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton.WithCallbackData("Get a joke", "joke"),
+                        InlineKeyboardButton.WithCallbackData("Roll the dice", "dice")
+                    ],
+                    [
+                        InlineKeyboardButton.WithCallbackData("Get a fun fact", "fact"),
+                        InlineKeyboardButton.WithCallbackData("Flip a coin", "coin")
+                    ],
+                    [
+                        InlineKeyboardButton.WithCallbackData("Get a server time", "time")
+                    ]
+                ])
+            );
         }
 
         async Task<Message> Usage(Message message)
@@ -78,7 +92,13 @@ namespace ReflectaBot.Services
         }
         private async Task OnInlineQuery(InlineQuery inlineQuery)
         {
+            logger.LogInformation("Received inline query from: {InlineQueryFromId}", inlineQuery.From.Id);
 
+            InlineQueryResult[] results = [ // displayed result
+                new InlineQueryResultArticle("1", "Telegram.Bot", new InputTextMessageContent("hello")),
+                new InlineQueryResultArticle("2", "is the best", new InputTextMessageContent("world"))
+            ];
+            await bot.AnswerInlineQuery(inlineQuery.Id, results, cacheTime: 0, isPersonal: true);
         }
         private async Task OnChosenInlineResult(ChosenInlineResult result)
         {
