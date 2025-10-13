@@ -61,20 +61,7 @@ namespace ReflectaBot.Services
             return await bot.SendMessage(
                 chatId: message.Chat.Id,
                 text: "What would you like to do?",
-                replyMarkup: new InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton.WithCallbackData("Get a joke", "joke"),
-                        InlineKeyboardButton.WithCallbackData("Roll the dice", "dice")
-                    ],
-                    [
-                        InlineKeyboardButton.WithCallbackData("Get a fun fact", "fact"),
-                        InlineKeyboardButton.WithCallbackData("Flip a coin", "coin")
-                    ],
-                    [
-                        InlineKeyboardButton.WithCallbackData("Get a server time", "time")
-                    ]
-                ])
+                replyMarkup: GetKeyboard()
             );
         }
 
@@ -109,7 +96,8 @@ namespace ReflectaBot.Services
                 Message sentMessage = await bot.EditMessageText(
                     chatId: message.Chat.Id,
                     messageId: message.MessageId,
-                    text: responseText
+                    text: responseText,
+                    replyMarkup: GetKeyboard()
                 );
 
                 logger.LogInformation("Response sent to {User} with message ID: {MessageId}", user, sentMessage.MessageId);
@@ -187,6 +175,23 @@ namespace ReflectaBot.Services
                 "🧠 Your brain uses about 20% of your body's total energy!"
             };
             return facts[Random.Shared.Next(facts.Length)];
+        }
+        private static InlineKeyboardMarkup GetKeyboard()
+        {
+            return new InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton.WithCallbackData("Get a joke", "joke"),
+                    InlineKeyboardButton.WithCallbackData("Roll the dice", "dice")
+                ],
+                [
+                    InlineKeyboardButton.WithCallbackData("Get a fun fact", "fact"),
+                    InlineKeyboardButton.WithCallbackData("Flip a coin", "coin")
+                ],
+                [
+                    InlineKeyboardButton.WithCallbackData("Get a server time", "time")
+                ]
+            ]);
         }
     }
 }
