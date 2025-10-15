@@ -56,13 +56,28 @@ try
                                 string.Empty;
     });
 
-    builder.Services.AddHttpClient("tgwebhook").RemoveAllLoggers().AddTypedClient<ITelegramBotClient>(
-        httpClient => new TelegramBotClient((Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN")) ?? builder.Configuration["Telegram:BotToken"] ?? string.Empty, httpClient));
+    builder.Services.AddHttpClient("tgwebhook")
+        .RemoveAllLoggers()
+        .AddTypedClient<ITelegramBotClient>(
+        httpClient => new TelegramBotClient(
+            Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN") ??
+            builder.Configuration["Telegram:BotToken"] ??
+            string.Empty, httpClient));
 
     builder.Services.AddSingleton<IUpdateHandler, UpdateHandler>();
 
+    if (builder.Environment.IsDevelopment())
+    {
+        Log.Information("Development mode: Using polling");
+        builder.Services.AddHostedService<TelegramPollingService>();
+    }
+    else
+    {
+        Log.Information("Production mode: Using webhooks");
+        builder.Services.AddHostedService<TelegrammWebhookService>();
+        builder.Services.AddControllers();
+    }
 
-    builder.Services.AddControllers();
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen(c =>
     {
@@ -78,10 +93,13 @@ try
         app.UseSwagger();
         app.UseSwaggerUI();
     }
-    app.UseHttpsRedirection();
-    app.UseRouting();
-    app.UseAuthorization();
-    app.MapControllers();
+    else
+    {
+        app.UseHttpsRedirection();
+        app.UseRouting();
+        app.UseAuthorization();
+        app.MapControllers();
+    }
 
     app.Run();
 
