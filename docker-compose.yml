@@ -19,6 +19,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs
+      - ./ReflectaBot/Data:/app/Data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5211/api/update"]
       interval: 30s
