@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
 using ReflectaBot.Models;
+using ReflectaBot.Models.Configuration;
 
 namespace ReflectaBot.Services.Embedding;
 

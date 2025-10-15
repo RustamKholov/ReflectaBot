@@ -4,18 +4,19 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
 using ReflectaBot.Models;
+using ReflectaBot.Models.Configuration;
 using Telegram.Bot;
 
 namespace ReflectaBot.Services
 {
-    public class TelegrammWebhookService : IHostedService
+    public class TelegramWebhookService : IHostedService
     {
         private readonly ITelegramBotClient _telegramBotClient;
-        private readonly ILogger<TelegrammWebhookService> _logger;
+        private readonly ILogger<TelegramWebhookService> _logger;
         private readonly TelegramBotConfiguration _configuration;
-        public TelegrammWebhookService(
+        public TelegramWebhookService(
             ITelegramBotClient telegramBotClient,
-            ILogger<TelegrammWebhookService> logger,
+            ILogger<TelegramWebhookService> logger,
             IOptions<TelegramBotConfiguration> cofigurations)
         {
             _telegramBotClient = telegramBotClient;

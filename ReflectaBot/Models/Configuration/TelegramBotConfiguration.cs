@@ -1,4 +1,4 @@
-﻿namespace ReflectaBot.Models;
+﻿namespace ReflectaBot.Models.Configuration;
 
 public class TelegramBotConfiguration
 {

@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
 using ReflectaBot.Models;
+using ReflectaBot.Models.Configuration;
 
 namespace ReflectaBot.Services.Intent
 {
@@ -80,6 +81,37 @@ namespace ReflectaBot.Services.Intent
             {
                 return null;
             }
+        }
+
+        public async Task<string> GenerateTextAsync(string prompt, CancellationToken ct = default)
+        {
+            var payload = new
+            {
+                model = _model,
+                messages = new[]
+                {
+                    new { role = "user", content = prompt}
+                },
+                max_tokens = 1000,
+                temperature = 0.7
+            };
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, _endpoint)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            using var res = await _httpClient.SendAsync(req, ct);
+            res.EnsureSuccessStatusCode();
+
+            using var stream = await res.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+
+            return doc.RootElement
+                    .GetProperty("choices")[0]
+                    .GetProperty("message")
+                    .GetProperty("content")
+                    .GetString() ?? "";
         }
     }
 }

@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using ReflectaBot.Models;
+using ReflectaBot.Models.Configuration;
 using ReflectaBot.Services;
 using Serilog;
 using Telegram.Bot;
