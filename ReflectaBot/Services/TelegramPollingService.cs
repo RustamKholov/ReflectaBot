@@ -1,30 +1,33 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Telegram.Bot;
-using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
+using Telegram.Bot.Exceptions;
+using Telegram.Bot.Types;
 
 namespace ReflectaBot.Services
 {
     public class TelegramPollingService : BackgroundService
     {
-        private readonly ITelegramBotClient _telegramBotClient;
-        private readonly IUpdateHandler _updateHandler;
+        private readonly ITelegramBotClient _botClient;
+        private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<TelegramPollingService> _logger;
-        public TelegramPollingService(ITelegramBotClient telegramBotClient, IUpdateHandler updateHandler, ILogger<TelegramPollingService> logger)
+
+        public TelegramPollingService(
+            ITelegramBotClient botClient,
+            IServiceProvider serviceProvider,
+            ILogger<TelegramPollingService> logger)
         {
-            _telegramBotClient = telegramBotClient;
-            _updateHandler = updateHandler;
+            _botClient = botClient;
+            _serviceProvider = serviceProvider;
             _logger = logger;
         }
+
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             try
             {
-                _logger.LogInformation("Starting telegram polling for development...");
-                await _telegramBotClient.DeleteWebhook(dropPendingUpdates: true, cancellationToken: stoppingToken);
+                _logger.LogInformation("Starting Telegram polling for development...");
+
+                await _botClient.DeleteWebhook(dropPendingUpdates: true, cancellationToken: stoppingToken);
                 _logger.LogInformation("Cleared existing webhook");
 
                 var receiverOptions = new ReceiverOptions
@@ -32,13 +35,15 @@ namespace ReflectaBot.Services
                     AllowedUpdates = [],
                     DropPendingUpdates = true
                 };
-                _telegramBotClient.StartReceiving(
-                    updateHandler: _updateHandler.HandleUpdateAsync,
-                    receiverOptions: receiverOptions,
+
+                _botClient.StartReceiving(
+                    updateHandler: new ScopedUpdateHandler(_serviceProvider).HandleUpdateAsync,
                     errorHandler: HandlePollingErrorAsync,
+                    receiverOptions: receiverOptions,
                     cancellationToken: stoppingToken
                 );
-                _logger.LogInformation("Telegram polling started successfully!");
+
+                _logger.LogInformation("Telegram polling started successfully");
 
                 await Task.Delay(Timeout.Infinite, stoppingToken);
             }
@@ -53,7 +58,7 @@ namespace ReflectaBot.Services
             }
         }
 
-        private Task HandlePollingErrorAsync(ITelegramBotClient telegramBotClient, Exception exception, CancellationToken cancellationToken)
+        private Task HandlePollingErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
         {
             var errorMessage = exception switch
             {
@@ -65,11 +70,29 @@ namespace ReflectaBot.Services
             _logger.LogError("{ErrorMessage}", errorMessage);
             return Task.CompletedTask;
         }
+    }
 
-        public override async Task StopAsync(CancellationToken cancellationToken)
+    public class ScopedUpdateHandler : IUpdateHandler
+    {
+        private readonly IServiceProvider _serviceProvider;
+
+        public ScopedUpdateHandler(IServiceProvider serviceProvider)
         {
-            _logger.LogInformation("Stopping Telegram polling...");
-            await base.StopAsync(cancellationToken);
+            _serviceProvider = serviceProvider;
+        }
+
+        public async Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source, CancellationToken cancellationToken)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<IUpdateHandler>();
+            await handler.HandleErrorAsync(botClient, exception, source, cancellationToken);
+        }
+
+        public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<IUpdateHandler>();
+            await handler.HandleUpdateAsync(botClient, update, cancellationToken);
         }
     }
 }

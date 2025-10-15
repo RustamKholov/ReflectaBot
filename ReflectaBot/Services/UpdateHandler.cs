@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using ReflectaBot.Services.Intent;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
@@ -10,8 +11,9 @@ using Telegram.Bot.Types.ReplyMarkups;
 
 namespace ReflectaBot.Services
 {
-    public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger) : IUpdateHandler
+    public class UpdateHandler(ITelegramBotClient bot, ILogger<UpdateHandler> logger, IIntentRouter intentRouter) : IUpdateHandler
     {
+
         public async Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source, CancellationToken cancellationToken)
         {
             logger.LogInformation("HandleError: {Exception}", exception);
@@ -43,16 +45,28 @@ namespace ReflectaBot.Services
             if (message.Text is not { } messageText)
                 return;
             string user = message.From?.FirstName ?? "Unknown";
-            Message msg = await (messageText switch
+
+            var (intent, confidence) = await intentRouter.RouteAsync(messageText);
+            logger.LogInformation("Intent detected: {Intent} with confidence: {Confidence:F3} for user: {User}",
+                intent, confidence, user);
+
+            Message msg = await (intent switch
             {
-                "/start" => SendStart(message),
-                "/clear" => ClearKeyboard(message),
-                "joke" => bot.SendMessage(message.Chat, ProcessMessage("/joke", user)),
-                "dice" => bot.SendMessage(message.Chat, ProcessMessage("/roll", user)),
-                "fact" => bot.SendMessage(message.Chat, ProcessMessage("/fact", user)),
-                "coin" => bot.SendMessage(message.Chat, ProcessMessage("/flip", user)),
-                "time" => bot.SendMessage(message.Chat, ProcessMessage("/time", user)),
-                _ => Usage(message)
+                "joke" or "humor" => bot.SendMessage(message.Chat, ProcessMessage("/joke", user)),
+                "dice" or "roll" or "random" => bot.SendMessage(message.Chat, ProcessMessage("/roll", user)),
+                "fact" or "trivia" => bot.SendMessage(message.Chat, ProcessMessage("/fact", user)),
+                "coin" or "flip" => bot.SendMessage(message.Chat, ProcessMessage("/flip", user)),
+                "time" or "clock" => bot.SendMessage(message.Chat, ProcessMessage("/time", user)),
+                "greeting" or "hello" => bot.SendMessage(message.Chat, $"Hello {user}! 👋 Nice to meet you!"),
+                "weather" => bot.SendMessage(message.Chat, "🌤️ I can't check weather yet, but it's always sunny in the server room!"),
+
+                _ when messageText.StartsWith("/start") => SendStart(message),
+                _ when messageText.StartsWith("/clear") => ClearKeyboard(message),
+
+                //fallback
+                "none" => HandleUnknownIntent(message, messageText, confidence),
+
+                _ => bot.SendMessage(message.Chat, ProcessMessage(messageText, user, message))
             });
             logger.LogInformation("The message was sent with id: {SentMessageId}", msg.Id);
         }
@@ -183,6 +197,26 @@ namespace ReflectaBot.Services
                 "🧠 Your brain uses about 20% of your body's total energy!"
             };
             return facts[Random.Shared.Next(facts.Length)];
+        }
+        private async Task<Message> HandleUnknownIntent(Message message, string messageText, double confidence)
+        {
+            string user = message.From?.FirstName ?? "Unknown";
+
+            logger.LogWarning("Unknown intent for message: '{MessageText}' with confidence: {Confidence:F3}",
+                messageText, confidence);
+
+            return await bot.SendMessage(
+                chatId: message.Chat.Id,
+                text: $"🤔 I'm not sure what you're looking for, {user}.\n\n" +
+                      "Try asking for:\n" +
+                      "🎭 A joke\n" +
+                      "🎲 Roll dice\n" +
+                      "📚 Fun fact\n" +
+                      "🪙 Flip coin\n" +
+                      "⏰ Current time\n\n" +
+                      "Or type /start for the menu!",
+                replyMarkup: GetKeyboard()
+            );
         }
         private static InlineKeyboardMarkup GetKeyboard()
         {

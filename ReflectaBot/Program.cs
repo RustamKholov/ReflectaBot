@@ -6,6 +6,8 @@ using ReflectaBot.Services;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Serilog;
+using ReflectaBot.Services.Embedding;
+using ReflectaBot.Services.Intent;
 
 var envPath = Path.Combine(Directory.GetCurrentDirectory(), "..", ".env");
 if (File.Exists(envPath))
@@ -56,6 +58,25 @@ try
                                 string.Empty;
     });
 
+    builder.Services.Configure<IntentConfiguration>(options =>
+    {
+        options.ExamplesJsonPath = Path.Combine(AppContext.BaseDirectory, "Data", "intent_examples.json");
+    });
+
+    builder.Services.Configure<EmbeddingConfiguration>(options =>
+    {
+        options.ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty;
+        options.ModelName = Environment.GetEnvironmentVariable("EMBEDDING_MODEL") ?? "text-embedding-3-small";
+        options.BaseUrl = Environment.GetEnvironmentVariable("OPENAI_EMBEDDING_BASE_URL") ?? "https://api.openai.com/";
+    });
+
+    builder.Services.Configure<LlmConfiguration>(options =>
+    {
+        options.ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty;
+        options.ModelName = Environment.GetEnvironmentVariable("LLM_MODEL") ?? "gpt-3.5-turbo";
+        options.BaseUrl = Environment.GetEnvironmentVariable("OPENAI_COMPLETION_BASE_URL") ?? "https://api.openai.com/";
+    });
+
     builder.Services.AddHttpClient("tgwebhook")
         .RemoveAllLoggers()
         .AddTypedClient<ITelegramBotClient>(
@@ -64,7 +85,21 @@ try
             builder.Configuration["Telegram:BotToken"] ??
             string.Empty, httpClient));
 
-    builder.Services.AddSingleton<IUpdateHandler, UpdateHandler>();
+    builder.Services.AddHttpClient<EmbeddingHelper>(client =>
+        {
+            client.Timeout = TimeSpan.FromMinutes(1);
+        });
+
+    builder.Services.AddHttpClient<ILlmClassifier, LlmClassifier>(client =>
+    {
+        client.Timeout = TimeSpan.FromMinutes(2);
+    });
+
+    builder.Services.AddScoped<IUpdateHandler, UpdateHandler>();
+
+    builder.Services.AddScoped<IIntentRouter, IntentRouter>();
+
+
 
     if (builder.Environment.IsDevelopment())
     {
