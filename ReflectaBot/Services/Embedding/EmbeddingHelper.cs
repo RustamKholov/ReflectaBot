@@ -14,14 +14,12 @@ namespace ReflectaBot.Services.Embedding;
 
 public class EmbeddingHelper
 {
-    private readonly IOptions<EmbeddingConfiguration> _config;
     private readonly HttpClient _httpClient;
     private readonly string _apiKey;
     private readonly string _endpoint;
     private readonly string _embeddingModel;
     public EmbeddingHelper(IOptions<EmbeddingConfiguration> config, HttpClient client)
     {
-        _config = config;
         _httpClient = client;
         _apiKey = config.Value.ApiKey;
         _endpoint = config.Value.BaseUrl;

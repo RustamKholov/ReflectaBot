@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using ReflectaBot.Interfaces.Intent;
 using ReflectaBot.Models.Intent;
 using ReflectaBot.Services.Embedding;
 

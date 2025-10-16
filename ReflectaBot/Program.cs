@@ -1,7 +1,5 @@
 using DotNetEnv;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.OpenApi.Models;
-using ReflectaBot.Models;
 using ReflectaBot.Services;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
@@ -9,7 +7,11 @@ using Serilog;
 using ReflectaBot.Services.Embedding;
 using ReflectaBot.Services.Intent;
 using ReflectaBot.Models.Configuration;
+using Microsoft.Extensions.FileProviders;
 using ReflectaBot.Models.Intent;
+using ReflectaBot.Interfaces.Intent;
+using ReflectaBot.Interfaces;
+
 
 var envPath = Path.Combine(Directory.GetCurrentDirectory(), "..", ".env");
 if (File.Exists(envPath))
@@ -69,14 +71,14 @@ try
     {
         options.ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty;
         options.ModelName = Environment.GetEnvironmentVariable("EMBEDDING_MODEL") ?? "text-embedding-3-small";
-        options.BaseUrl = Environment.GetEnvironmentVariable("OPENAI_EMBEDDING_BASE_URL") ?? "https://api.openai.com/";
+        options.BaseUrl = Environment.GetEnvironmentVariable("OPENAI_EMBEDDING_BASE_URL") ?? "https://api.openai.com/v1/embeddings";
     });
 
     builder.Services.Configure<LlmConfiguration>(options =>
     {
         options.ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty;
         options.ModelName = Environment.GetEnvironmentVariable("LLM_MODEL") ?? "gpt-3.5-turbo";
-        options.BaseUrl = Environment.GetEnvironmentVariable("OPENAI_COMPLETION_BASE_URL") ?? "https://api.openai.com/";
+        options.BaseUrl = Environment.GetEnvironmentVariable("OPENAI_COMPLETION_BASE_URL") ?? "https://api.openai.com/v1/chat/completions";
     });
 
     builder.Services.AddHttpClient("tgwebhook")
@@ -97,9 +99,22 @@ try
         client.Timeout = TimeSpan.FromMinutes(2);
     });
 
+    builder.Services.AddHttpClient<IUrlService, UrlService>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(10);
+    });
+
+    builder.Services.AddHttpClient<IContentScrapingService, ContentScrapingService>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
+
+
     builder.Services.AddScoped<IntentEmbeddingService>();
     builder.Services.AddScoped<IUpdateHandler, UpdateHandler>();
     builder.Services.AddScoped<IIntentRouter, IntentRouter>();
+
+    builder.Services.AddSingleton<IUrlCacheService, UrlCacheService>();
 
 
 
@@ -121,78 +136,9 @@ try
         c.SwaggerDoc("v1", new OpenApiInfo { Title = "ReflectaBot", Version = "v1" });
     });
 
+
+
     var app = builder.Build();
-
-    if (args.Contains("--setup-intents"))
-    {
-        Log.Information("Setting up intent embeddings...");
-
-        using var scope = app.Services.CreateScope();
-        var embeddingService = scope.ServiceProvider.GetRequiredService<IntentEmbeddingService>();
-
-        // Define your bot's intents
-        var intentDefinitions = new List<IntentDefinition>
-    {
-        new()
-        {
-            Intent = "joke",
-            Description = "User wants to hear a funny joke or humorous content",
-            Examples = new() { "tell me a joke", "make me laugh", "something funny" }
-        },
-        new()
-        {
-            Intent = "dice",
-            Description = "User wants to roll dice or get a random number",
-            Examples = new() { "roll dice", "random number", "roll a d6" }
-        },
-        new()
-        {
-            Intent = "time",
-            Description = "User wants to know the current time",
-            Examples = new() { "what time is it", "current time", "show me the clock" }
-        },
-        new()
-        {
-            Intent = "fact",
-            Description = "User wants to hear an interesting fact or trivia",
-            Examples = new() { "tell me a fact", "something interesting", "did you know" }
-        },
-        new()
-        {
-            Intent = "coin",
-            Description = "User wants to flip a coin for heads or tails",
-            Examples = new() { "flip a coin", "heads or tails", "coin flip" }
-        },
-        new()
-        {
-            Intent = "greeting",
-            Description = "User is saying hello or greeting the bot",
-            Examples = new() { "hello", "hi", "good morning", "hey there" }
-        },
-        new()
-        {
-            Intent = "weather",
-            Description = "User is asking about weather conditions",
-            Examples = new() { "how's the weather", "is it raining", "weather forecast" }
-        }
-    };
-
-        var success = await embeddingService.GenerateIntentEmbeddingAsync(intentDefinitions);
-
-        if (success)
-        {
-            Log.Information("Intent embeddings generated successfully!");
-            Log.Information("Estimated cost: $1-3 (one-time setup)");
-            Log.Information("Your bot is now ready for fast, accurate intent recognition!");
-        }
-        else
-        {
-            Log.Error("Failed to generate intent embeddings");
-        }
-
-        return;
-    }
-
 
     // Configure the HTTP request pipeline.
     if (app.Environment.IsDevelopment())

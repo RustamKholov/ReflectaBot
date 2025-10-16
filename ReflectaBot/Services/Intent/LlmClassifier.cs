@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
+using ReflectaBot.Interfaces.Intent;
 using ReflectaBot.Models;
 using ReflectaBot.Models.Configuration;
 
