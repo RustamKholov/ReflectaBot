@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace ReflectaBot.Models;
+namespace ReflectaBot.Models.Content;
 
 public class ScrapedContent
 {

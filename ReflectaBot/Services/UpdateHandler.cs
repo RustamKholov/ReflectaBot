@@ -1,16 +1,17 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
+
 using ReflectaBot.Interfaces;
 using ReflectaBot.Interfaces.Intent;
 using ReflectaBot.Models.Intent;
+using ReflectaBot.Models.Content;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.ReplyMarkups;
+using ReflectaBot.Interfaces.Enums;
+using Elasticsearch.Net.Specification.CatApi;
+using System.Net.Mime;
+using ReflectaBot.Models.AI;
 
 namespace ReflectaBot.Services
 {
@@ -22,6 +23,9 @@ namespace ReflectaBot.Services
         private readonly IUrlService _urlService;
         private readonly IContentScrapingService _contentScrapingService;
         private readonly IUrlCacheService _urlCacheService;
+        private readonly IContentProcessor _contentProcessor;
+        private readonly IContentCacheService _contentCacheService;
+        private readonly IAIContentService _aIContentService;
 
         public UpdateHandler(
             ITelegramBotClient bot,
@@ -29,14 +33,20 @@ namespace ReflectaBot.Services
             IIntentRouter intentRouter,
             IUrlService urlService,
             IContentScrapingService contentScrapingService,
-            IUrlCacheService urlCacheService)
+            IUrlCacheService urlCacheService,
+            IContentProcessor contentProcessor,
+            IContentCacheService contentCacheService,
+            IAIContentService aIContentService)
         {
-            _bot = bot ?? throw new ArgumentNullException(nameof(bot));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _intentRouter = intentRouter ?? throw new ArgumentNullException(nameof(intentRouter));
-            _urlService = urlService ?? throw new ArgumentNullException(nameof(urlService));
-            _contentScrapingService = contentScrapingService ?? throw new ArgumentNullException(nameof(contentScrapingService));
-            _urlCacheService = urlCacheService ?? throw new ArgumentNullException(nameof(urlCacheService));
+            _bot = bot;
+            _logger = logger;
+            _intentRouter = intentRouter;
+            _urlService = urlService;
+            _contentScrapingService = contentScrapingService;
+            _urlCacheService = urlCacheService;
+            _contentProcessor = contentProcessor;
+            _contentCacheService = contentCacheService;
+            _aIContentService = aIContentService;
         }
 
         public async Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, HandleErrorSource source, CancellationToken cancellationToken)
@@ -73,10 +83,11 @@ namespace ReflectaBot.Services
 
             string user = message.From?.FirstName ?? "Unknown";
 
-            var urls = _urlService.ExtractUrls(messageText);
-            if (urls.Count != 0)
+            var contentType = DetectContentType(messageText, message);
+
+            if (contentType != ContentSourceType.Unknow)
             {
-                await HandleUrlsDetected(message, urls, user);
+                await HandleContentProcessing(message, messageText, contentType, user);
                 return;
             }
 
@@ -212,6 +223,59 @@ namespace ReflectaBot.Services
 
         #region Content Processing Intent Handlers
 
+
+        private async Task HandleContentProcessing(Message message, string text, ContentSourceType sourceType, string user)
+        {
+            try
+            {
+                var processingMessage = await _bot.SendMessage(
+                    chatId: message.Chat.Id,
+                    text: $"🔍 Processing {GetContentTypeDescription(sourceType)}...\n\n" +
+                  "Analyzing content and preparing learning materials."
+                );
+
+                var processedContent = await _contentProcessor.ProcessAsync(text, sourceType);
+
+                if (!processedContent.Success)
+                {
+                    await _bot.EditMessageText(
+                        chatId: message.Chat.Id,
+                        messageId: processingMessage.MessageId,
+                        text: $"❌ Sorry, I couldn't process that content:\n\n" +
+                                $"**Error:** {processedContent.Error}\n\n" +
+                                GetContentProcessingTips(sourceType)
+                    );
+                    return;
+                }
+                var contentId = await _contentCacheService.CacheContentAsync(processedContent);
+                var keyboard = CreateContentActionKeyboard(contentId, sourceType);
+
+                var previewText = processedContent.Content.Length > 400
+                    ? processedContent.Content.Substring(0, 400) + "..."
+                    : processedContent.Content;
+
+                await _bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: processingMessage.MessageId,
+                    text: FormatContentPreview(processedContent, previewText),
+                    replyMarkup: keyboard,
+                    parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown
+                );
+
+                _logger.LogInformation("Successfully processed {ContentType} for {User}: {WordCount} words",
+                    sourceType, user, processedContent.WordCount);
+
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing {ContentType} for user {User}", sourceType, user);
+
+                await _bot.SendMessage(
+                    chatId: message.Chat.Id,
+                    text: $"❌ An error occurred while processing the content. {GetContentProcessingTips(sourceType)}"
+                );
+            }
+        }
         private async Task<Message> HandleUrlProcessing(Message message, string user)
         {
             return await _bot.SendMessage(
@@ -553,6 +617,31 @@ namespace ReflectaBot.Services
             );
         }
 
+        private ContentSourceType DetectContentType(string text, Message message)
+        {
+            var urls = _urlService.ExtractUrls(text);
+            if (urls.Any())
+            {
+                return ContentSourceType.Url;
+            }
+
+            if (message.Document != null)
+            {
+                var allowedTypes = new[] { ".txt", ".pdf", ".docx", ".md" };
+                var extension = Path.GetExtension(message.Document.FileName?.ToLower());
+                if (allowedTypes.Contains(extension))
+                {
+                    return ContentSourceType.Document;
+                }
+            }
+
+            if (text.Length > 200 && text.Split(' ').Length > 30)
+            {
+                return ContentSourceType.PlainText;
+            }
+            return ContentSourceType.Unknow;
+        }
+
         #endregion
 
         #region Callback Query Handler
@@ -570,61 +659,237 @@ namespace ReflectaBot.Services
                 {
                     var parts = data.Split(':', 2);
                     var action = parts[0];
-                    var urlId = parts.Length > 1 ? parts[1] : "";
+                    var contentId = parts.Length > 1 ? parts[1] : "";
 
-                    var originalUrl = await _urlCacheService.GetUrlAsync(urlId);
-                    if (string.IsNullOrEmpty(originalUrl))
-                    {
-                        await _bot.EditMessageText(
-                            chatId: message.Chat.Id,
-                            messageId: message.MessageId,
-                            text: "❌ Sorry, the article reference has expired. Please share the URL again.",
-                            replyMarkup: GetMainMenuKeyboard()
-                        );
-                        return;
-                    }
-
-                    _logger.LogInformation("Processing callback action '{Action}' for URL: {Url}", action, originalUrl);
-
-                    var responseText = action switch
-                    {
-                        "summary" => $"📝 {user}, generating AI summary for this article...\n\n*🚧 Feature in development - AI-powered summarization coming soon!*\n\n🔗 Article: {new Uri(originalUrl).Host}",
-                        "quiz" => $"🧠 {user}, creating interactive quiz questions...\n\n*🚧 Feature in development - Personalized quizzes with spaced repetition coming soon!*\n\n🔗 Article: {new Uri(originalUrl).Host}",
-                        "save" => $"💾 {user}, saving article to your personal library...\n\n*🚧 Feature in development - Personal article management coming soon!*\n\n🔗 Article: {new Uri(originalUrl).Host}",
-                        "similar" => $"🔍 {user}, finding similar articles...\n\n*🚧 Feature in development - AI-powered content discovery coming soon!*\n\n🔗 Article: {new Uri(originalUrl).Host}",
-                        _ => "🤖 Unknown action selected."
-                    };
-
-                    await _bot.EditMessageText(
-                        chatId: message.Chat.Id,
-                        messageId: message.MessageId,
-                        text: responseText,
-                        replyMarkup: GetMainMenuKeyboard()
-                    );
+                    await HandleContentAction(message, action, contentId, user);
                 }
                 else
                 {
-                    await HandleNonUrlCallback(message, data, user);
+                    await HandleNonContentCallback(message, data, user);
                 }
             }
         }
+        private async Task HandleContentAction(Message message, string action, string contentId, string user)
+        {
+            try
+            {
+                var cachedContent = await _contentCacheService.GetContentAsync(contentId);
+                if (cachedContent == null)
+                {
+                    await _bot.EditMessageText(
+                        chatId: message.Chat.Id,
+                        messageId: message.MessageId,
+                        text: "❌ Sorry, the content reference has expired. Please share the content again.",
+                        replyMarkup: GetMainMenuKeyboard()
+                    );
+                    return;
+                }
 
-        private async Task HandleNonUrlCallback(Message message, string data, string user)
+                _logger.LogInformation("Processing callback action '{Action}' for cached content: {WordCount} words",
+                    action, cachedContent.WordCount);
+
+                await (action switch
+                {
+                    "summary" => ProcessSummaryRequest(message, cachedContent, user),
+                    "quiz" => ProcessQuizRequest(message, cachedContent, user),
+                    "save" => ProcessSaveRequest(message, cachedContent, user),
+                    "similar" => ProcessSimilarRequest(message, cachedContent, user),
+                    _ => HandleUnknownAction(message, action, user)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing content action '{Action}' for user {User}", action, user);
+
+                await _bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: message.MessageId,
+                    text: "❌ An error occurred while processing your request. Please try again.",
+                    replyMarkup: GetMainMenuKeyboard()
+                );
+            }
+        }
+        private async Task ProcessSummaryRequest(Message message, ProcessedContent content, string user)
+        {
+            try
+            {
+                await _bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: message.MessageId,
+                    text: $"📝 Generating AI summary for {user}...\n\n" +
+                          $"🔍 Analyzing {content.WordCount} words of content\n" +
+                          $"⏱️ This may take a few seconds",
+                    replyMarkup: new InlineKeyboardMarkup(new[]
+                    {
+                InlineKeyboardButton.WithCallbackData("⏹️ Cancel", "cancel_summary")
+                    })
+                );
+
+                var existingSummary = await CheckForExistingSummary(content);
+                if (existingSummary != null)
+                {
+                    _logger.LogInformation("Using cached summary for content to optimize costs");
+                    await DisplaySummaryResult(message, existingSummary, content, user);
+                    return;
+                }
+
+                var summaryResult = await GenerateAiSummary(content);
+
+                if (summaryResult.Success)
+                {
+                    await CacheSummaryResult(content, summaryResult);
+                    await DisplaySummaryResult(message, summaryResult, content, user);
+                }
+                else
+                {
+                    await DisplaySummaryError(message, summaryResult.Error!, user);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error generating summary for user {User}", user);
+                await DisplaySummaryError(message, "Summary generation failed", user);
+            }
+        }
+
+        private async Task ProcessQuizRequest(Message message, ProcessedContent content, string user)
+        {
+            try
+            {
+                await _bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: message.MessageId,
+                    text: $"🧠 Creating interactive quiz for {user}...\n\n" +
+                          $"🔍 Analyzing {content.WordCount} words for key concepts\n" +
+                          $"🎯 Generating multiple-choice questions\n" +
+                          $"⏱️ This may take a few seconds",
+                    replyMarkup: new InlineKeyboardMarkup(new[]
+                    {
+                InlineKeyboardButton.WithCallbackData("⏹️ Cancel", "cancel_quiz")
+                    })
+                );
+
+                var existingQuiz = await CheckForExistingQuiz(content);
+                if (existingQuiz != null)
+                {
+                    _logger.LogInformation("Using cached quiz for content to optimize costs");
+                    await DisplayQuizResult(message, existingQuiz, content, user);
+                    return;
+                }
+
+                var quizResult = await GenerateAiQuiz(content);
+
+                if (quizResult.Success)
+                {
+                    await CacheQuizResult(content, quizResult);
+                    await DisplayQuizResult(message, quizResult, content, user);
+                }
+                else
+                {
+                    await DisplayQuizError(message, quizResult.Error!, user);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error generating quiz for user {User}", user);
+                await DisplayQuizError(message, "Quiz generation failed", user);
+            }
+        }
+
+        private async Task ProcessSaveRequest(Message message, ProcessedContent content, string user)
+        {
+            try
+            {
+                // TODO: Implement database saving with Entity Framework
+                await _bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: message.MessageId,
+                    text: $"💾 Saving content to {user}'s personal library...\n\n" +
+                          $"📄 **{EscapeMarkdown(content.Title)}**\n" +
+                          $"📊 {content.WordCount} words\n\n" +
+                          "*🚧 Feature in development - Personal library with SQLite database coming soon!*",
+                    replyMarkup: GetMainMenuKeyboard()
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error saving content for user {User}", user);
+            }
+        }
+
+        private async Task ProcessSimilarRequest(Message message, ProcessedContent content, string user)
+        {
+            try
+            {
+                // TODO: Implement semantic similarity using embeddings
+                await _bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: message.MessageId,
+                    text: $"🔍 Finding articles similar to this content for {user}...\n\n" +
+                          $"📄 **{EscapeMarkdown(content.Title)}**\n" +
+                          $"🎯 Analyzing semantic content for recommendations\n\n" +
+                          "*🚧 Feature in development - AI-powered content discovery using embeddings coming soon!*",
+                    replyMarkup: GetMainMenuKeyboard()
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error finding similar content for user {User}", user);
+            }
+        }
+        private async Task<AISummaryResult> GenerateAiSummary(ProcessedContent content)
+        {
+            try
+            {
+                _logger.LogInformation("Generating AI summary for content: {WordCount} words", content.WordCount);
+                return await _aIContentService.GenerateSummaryAsync(content);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "AI summary generation failed");
+                return new AISummaryResult
+                {
+                    Success = false,
+                    Error = $"AI service error: {ex.Message}"
+                };
+            }
+        }
+        private async Task<AIQuizResult> GenerateAiQuiz(ProcessedContent content)
+        {
+            try
+            {
+                _logger.LogInformation("Generating AI quiz for content: {WordCount} words", content.WordCount);
+                return await _aIContentService.GenerateQuizAsync(content);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "AI quiz generation failed");
+                return new AIQuizResult
+                {
+                    Success = false,
+                    Error = $"AI service error: {ex.Message}"
+                };
+            }
+        }
+
+        private async Task HandleNonContentCallback(Message message, string data, string user)
         {
             var (responseText, keyboard) = data switch
             {
-                // Legacy
                 "joke" => (GetRandomJoke(), GetLegacyKeyboard()),
                 "dice" => ($"🎲 {user}, you rolled: {Random.Shared.Next(1, 7)}!", GetLegacyKeyboard()),
                 "fact" => (GetRandomFact(), GetLegacyKeyboard()),
                 "coin" => ($"{user}, {(Random.Shared.Next(2) == 0 ? "🪙 Heads!" : "🪙 Tails!")}", GetLegacyKeyboard()),
                 "time" => ($"⏰ Server time: {DateTime.Now:yyyy-MM-dd HH:mm:ss} UTC", GetLegacyKeyboard()),
 
-                // Main menu callbacks
                 "browse" => ($"📚 {user}, browsing your article library...\n\n*🚧 Coming soon: Smart article organization and search*", GetBrowseKeyboard()),
                 "study" => ($"🎯 {user}, starting your study session...\n\n*🚧 Coming soon: Personalized flashcard reviews*", GetStudyKeyboard()),
                 "progress" => ($"📊 {user}, here's your learning progress!\n\n*🚧 Coming soon: Detailed analytics and insights*", GetMainMenuKeyboard()),
                 "help" => (GetHelpText(), GetMainMenuKeyboard()),
+                "main_menu" => ("🏠 **Main Menu**\n\nWhat would you like to do?", GetMainMenuKeyboard()),
+
+                "cancel_summary" => ("⏹️ Summary generation cancelled.", GetMainMenuKeyboard()),
+                "cancel_quiz" => ("⏹️ Quiz generation cancelled.", GetMainMenuKeyboard()),
 
                 _ => ("🤖 Unknown command!", GetMainMenuKeyboard())
             };
@@ -634,6 +899,112 @@ namespace ReflectaBot.Services
                 messageId: message.MessageId,
                 text: responseText,
                 replyMarkup: keyboard
+            );
+        }
+        private async Task HandleUnknownAction(Message message, string action, string user)
+        {
+            await _bot.EditMessageText(
+                chatId: message.Chat.Id,
+                messageId: message.MessageId,
+                text: $"🤖 Unknown action: {action}\n\nPlease try again or return to the main menu.",
+                replyMarkup: GetMainMenuKeyboard()
+            );
+        }
+        private async Task DisplaySummaryResult(Message message, AISummaryResult summaryResult, ProcessedContent content, string user)
+        {
+            var summaryText = $"📝 **AI Summary for {user}**\n\n" +
+                             $"📄 **{EscapeMarkdown(content.Title)}**\n" +
+                             $"📊 *{content.WordCount} words • {EstimateReadingTime(content.WordCount)} min read*\n\n" +
+                             $"**🎯 Key Points:**\n{summaryResult.Summary}\n\n" +
+                             $"⏱️ *Generated in {summaryResult.ProcessingTimeMs}ms*";
+
+            var keyboard = new InlineKeyboardMarkup(new[]
+            {
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("🧠 Create Quiz", $"quiz:{await _contentCacheService.CacheContentAsync(content)}"),
+                    InlineKeyboardButton.WithCallbackData("💾 Save Article", $"save:{await _contentCacheService.CacheContentAsync(content)}")
+                },
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("🔍 Find Similar", $"similar:{await _contentCacheService.CacheContentAsync(content)}"),
+                    InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
+                }
+            });
+
+            await _bot.EditMessageText(
+                chatId: message.Chat.Id,
+                messageId: message.MessageId,
+                text: summaryText,
+                replyMarkup: keyboard,
+                parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown
+            );
+        }
+        private async Task DisplayQuizResult(Message message, AIQuizResult quizResult, ProcessedContent content, string user)
+        {
+            if (!quizResult.Questions.Any())
+            {
+                await DisplayQuizError(message, "No quiz questions generated", user);
+                return;
+            }
+
+            var firstQuestion = quizResult.Questions.First();
+            var questionText = $"🧠 **Knowledge Quiz for {user}**\n\n" +
+                              $"📄 **{EscapeMarkdown(content.Title)}**\n\n" +
+                              $"**Question 1 of {quizResult.Questions.Length}:**\n" +
+                              $"{EscapeMarkdown(firstQuestion.Question)}\n\n" +
+                              "Choose your answer:";
+
+            var cachedContentId = await _contentCacheService.CacheContentAsync(content);
+
+            var optionButtons = firstQuestion.Options.Select((option, index) =>
+                new[] { InlineKeyboardButton.WithCallbackData($"{(char)('A' + index)}. {option}", $"answer:{cachedContentId}:0:{index}") }
+            ).ToArray();
+
+            var controlButtons = new[]
+            {
+                InlineKeyboardButton.WithCallbackData("📊 Quiz Stats", $"quiz_stats:{cachedContentId}"),
+                InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
+            };
+
+            var keyboard = new InlineKeyboardMarkup(optionButtons.Append(controlButtons));
+
+            await _bot.EditMessageText(
+                chatId: message.Chat.Id,
+                messageId: message.MessageId,
+                text: questionText,
+                replyMarkup: keyboard,
+                parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown
+            );
+        }
+        private async Task DisplaySummaryError(Message message, string error, string user)
+        {
+            await _bot.EditMessageText(
+                chatId: message.Chat.Id,
+                messageId: message.MessageId,
+                text: $"❌ **Summary Generation Failed**\n\n" +
+                      $"Sorry {user}, I couldn't generate a summary:\n" +
+                      $"**Error:** {error}\n\n" +
+                      "💡 **Try:**\n" +
+                      "• Check if the content is suitable for summarization\n" +
+                      "• Try again in a few moments\n" +
+                      "• Share different content",
+                replyMarkup: GetMainMenuKeyboard()
+            );
+        }
+        private async Task DisplayQuizError(Message message, string error, string user)
+        {
+            await _bot.EditMessageText(
+                chatId: message.Chat.Id,
+                messageId: message.MessageId,
+                text: $"❌ **Quiz Generation Failed**\n\n" +
+                      $"Sorry {user}, I couldn't create a quiz:\n" +
+                      $"**Error:** {error}\n\n" +
+                      "💡 **Try:**\n" +
+                      "• Ensure content has sufficient educational material\n" +
+                      "• Try again in a few moments\n" +
+                      "• Share more detailed content",
+                replyMarkup: GetMainMenuKeyboard()
             );
         }
 
@@ -747,6 +1118,40 @@ namespace ReflectaBot.Services
                 }
             });
         }
+        private static InlineKeyboardMarkup CreateContentActionKeyboard(string contentId, ContentSourceType sourceType)
+        {
+            var baseActions = new[]
+            {
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("📝 Generate Summary", $"summary:{contentId}"),
+                    InlineKeyboardButton.WithCallbackData("🧠 Create Quiz", $"quiz:{contentId}")
+                },
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("💾 Save for Later", $"save:{contentId}"),
+                    InlineKeyboardButton.WithCallbackData("🔍 Find Similar", $"similar:{contentId}")
+                }
+            };
+            var actions = sourceType switch
+            {
+                ContentSourceType.Url => baseActions.Append(new[]
+                {
+            InlineKeyboardButton.WithCallbackData("🔗 View Original", $"original:{contentId}"),
+            InlineKeyboardButton.WithCallbackData("📋 Copy Text", $"copy:{contentId}")
+                }).ToArray(),
+
+                ContentSourceType.Document => baseActions.Append(new[]
+                {
+            InlineKeyboardButton.WithCallbackData("📄 Document Info", $"docinfo:{contentId}"),
+            InlineKeyboardButton.WithCallbackData("📋 Extract Text", $"extract:{contentId}")
+                }).ToArray(),
+
+                _ => baseActions
+            };
+
+            return new InlineKeyboardMarkup(actions);
+        }
 
         #endregion
 
@@ -809,6 +1214,82 @@ namespace ReflectaBot.Services
             return Math.Max(1, (int)Math.Ceiling((double)wordCount / wordsPerMinute));
         }
 
+        private static string GetContentTypeDescription(ContentSourceType contentType) => contentType switch
+        {
+            ContentSourceType.Url => "web article",
+            ContentSourceType.PlainText => "text content",
+            ContentSourceType.Document => "document",
+            ContentSourceType.PastedContent => "pasted content",
+            _ => "content"
+        };
+        private static string GetContentProcessingTips(ContentSourceType contentType) => contentType switch
+        {
+            ContentSourceType.Url => "💡 **Tips for better URL processing:**\n" +
+                                     "• Try copying the article text directly\n" +
+                                     "• Use reader mode if available\n" +
+                                     "• Some sites block automated access",
+
+            ContentSourceType.PlainText => "💡 **For text analysis:**\n" +
+                                          "• Paste longer text (200+ words works best)\n" +
+                                          "• Include the main content, not just excerpts",
+
+            ContentSourceType.Document => "💡 **Supported documents:**\n" +
+                                         "• .txt, .pdf, .docx, .md files\n" +
+                                         "• Max 10MB file size",
+
+            _ => "💡 Try pasting the article text directly for best results."
+        };
+        private static string FormatContentPreview(ProcessedContent content, string previewText)
+        {
+            var title = !string.IsNullOrEmpty(content.Title) ? content.Title : "Content Analysis";
+            var sourceInfo = GetSourceInfo(content);
+            var readingTime = EstimateReadingTime(content.WordCount);
+
+            return $"📄 **{EscapeMarkdown(title)}**\n\n" +
+                   $"📊 *{content.WordCount} words • ~{readingTime} min read* {sourceInfo}\n\n" +
+                   $"{EscapeMarkdown(previewText)}\n\n" +
+                   "🎯 **What would you like to do with this content?**";
+        }
+        private static string GetSourceInfo(ProcessedContent content)
+        {
+            return content.SourceType switch
+            {
+                ContentSourceType.Url when content.SourceUrl != null =>
+                    $"• 🌐 {GetDomainFromUrl(content.SourceUrl)}",
+                ContentSourceType.Document =>
+                    $"• 📄 {content.Metadata.ProcessorUsed ?? "Document"}",
+                ContentSourceType.PlainText =>
+                    $"• 📝 Text Analysis",
+                _ => ""
+            };
+        }
+        private static string GetDomainFromUrl(string url)
+        {
+            try
+            {
+                var uri = new Uri(url);
+                return uri.Host.StartsWith("www.") ? uri.Host.Substring(4) : uri.Host;
+            }
+            catch
+            {
+                return "External Source";
+            }
+        }
+        private static string EscapeMarkdown(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return string.Empty;
+
+            var markdownChars = new[] { '*', '_', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!' };
+
+            foreach (var ch in markdownChars)
+            {
+                text = text.Replace(ch.ToString(), $"\\{ch}");
+            }
+
+            return text;
+        }
+
         #endregion
 
         #region Event Handlers (Placeholders)
@@ -844,5 +1325,40 @@ namespace ReflectaBot.Services
         }
 
         #endregion
+        #region Helper Methods for AI Processing
+
+        private async Task<AISummaryResult?> CheckForExistingSummary(ProcessedContent content)
+        {
+            // TODO: Implement summary caching with database
+            return null;
+        }
+
+
+        private async Task<AIQuizResult?> CheckForExistingQuiz(ProcessedContent content)
+        {
+            // TODO: Implement quiz caching with database
+            return null;
+        }
+
+
+        private async Task CacheSummaryResult(ProcessedContent content, AISummaryResult summary)
+        {
+            // TODO: Implement summary caching with  database
+            _logger.LogDebug("Caching summary result for content: {Title}", content.Title);
+        }
+
+
+        private async Task CacheQuizResult(ProcessedContent content, AIQuizResult quiz)
+        {
+            // TODO: Implement quiz caching with  database
+            _logger.LogDebug("Caching quiz result for content: {Title}", content.Title);
+        }
+
+        private static int EstimateTokenUsage(string text)
+        {
+            return (int)Math.Ceiling(text.Length / 4.0);
+        }
+        #endregion
     }
+
 }

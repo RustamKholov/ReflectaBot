@@ -8,6 +8,7 @@ using HtmlAgilityPack;
 using Microsoft.Extensions.Logging;
 using ReflectaBot.Interfaces;
 using ReflectaBot.Models;
+using ReflectaBot.Models.Content;
 
 namespace ReflectaBot.Services
 {

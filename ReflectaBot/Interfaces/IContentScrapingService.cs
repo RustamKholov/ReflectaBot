@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using ReflectaBot.Models;
+using ReflectaBot.Models.Content;
 
 namespace ReflectaBot.Interfaces
 {

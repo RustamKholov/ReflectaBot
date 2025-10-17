@@ -7,8 +7,6 @@ using Serilog;
 using ReflectaBot.Services.Embedding;
 using ReflectaBot.Services.Intent;
 using ReflectaBot.Models.Configuration;
-using Microsoft.Extensions.FileProviders;
-using ReflectaBot.Models.Intent;
 using ReflectaBot.Interfaces.Intent;
 using ReflectaBot.Interfaces;
 
@@ -109,10 +107,18 @@ try
         client.Timeout = TimeSpan.FromSeconds(30);
     });
 
+    builder.Services.AddHttpClient<IAIContentService, AIContentService>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
 
     builder.Services.AddScoped<IntentEmbeddingService>();
     builder.Services.AddScoped<IUpdateHandler, UpdateHandler>();
     builder.Services.AddScoped<IIntentRouter, IntentRouter>();
+    builder.Services.AddScoped<IContentProcessor, UniversalContentProcessor>();
+    builder.Services.AddScoped<ITextAnalysisService, TextAnalysisService>();
+    builder.Services.AddScoped<IDocumentProcessor, DocumentProcessor>();
+    builder.Services.AddSingleton<IContentCacheService, ContentCacheService>();
 
     builder.Services.AddSingleton<IUrlCacheService, UrlCacheService>();
 
