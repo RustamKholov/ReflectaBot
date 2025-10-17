@@ -92,7 +92,12 @@ namespace ReflectaBot.Services
                 var optimizedContent = OptimizeContentForAI(content.Content, maxTokens: 2500);
                 var estimatedTokens = EstimateTokenUsage(optimizedContent);
 
-                var jsonTemplate = """
+                var prompt = """
+                    Analyze the following text and create exactly 3 multiple-choice questions to test understanding of the key concepts.
+                    Each question should have 4 options with only one correct answer.
+                    Include a brief explanation for the correct answer.
+                    
+                    IMPORTANT: Respond ONLY with valid JSON in this exact format (no additional text, no markdown formatting):
                     {
                         "questions": [
                             {
@@ -100,22 +105,24 @@ namespace ReflectaBot.Services
                                 "options": ["Option A", "Option B", "Option C", "Option D"],
                                 "correctAnswer": 0,
                                 "explanation": "Why this answer is correct"
+                            },
+                            {
+                                "question": "Second question text?",
+                                "options": ["Option A", "Option B", "Option C", "Option D"],
+                                "correctAnswer": 1,
+                                "explanation": "Why this answer is correct"
+                            },
+                            {
+                                "question": "Third question text?",
+                                "options": ["Option A", "Option B", "Option C", "Option D"],
+                                "correctAnswer": 2,
+                                "explanation": "Why this answer is correct"
                             }
                         ]
                     }
-                    """;
 
-                var prompt = $"""
-                    Analyze the following text and create exactly 3 multiple-choice questions to test understanding of the key concepts.
-                    Each question should have 4 options (A, B, C, D) with only one correct answer.
-                    Include a brief explanation for the correct answer.
-                    
-                    Format your response as JSON using this exact structure:
-                    {jsonTemplate}
-
-                    Text:
-                    {optimizedContent}
-                    """;
+                    Text to analyze:
+                    """ + optimizedContent;
 
                 var response = await CallOpenAIAsync(prompt, maxTokens: 800, cancellationToken);
 
@@ -270,6 +277,8 @@ namespace ReflectaBot.Services
         {
             try
             {
+                _logger.LogDebug("Raw AI response: {JsonContent}", jsonContent);
+
                 var cleanJson = jsonContent.Trim();
                 if (cleanJson.StartsWith("```json"))
                 {
@@ -279,16 +288,104 @@ namespace ReflectaBot.Services
                 {
                     cleanJson = cleanJson.Substring(0, cleanJson.Length - 3);
                 }
+                cleanJson = cleanJson.Trim();
 
-                var quizData = JsonSerializer.Deserialize<QuizJsonResponse>(cleanJson);
-                return quizData?.questions ?? Array.Empty<QuizQuestion>();
+                _logger.LogDebug("Cleaned JSON: {CleanJson}", cleanJson);
+
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                };
+
+                var quizData = JsonSerializer.Deserialize<QuizJsonResponse>(cleanJson, options);
+
+                if (quizData?.questions == null || !quizData.questions.Any())
+                {
+                    _logger.LogWarning("No questions found in parsed JSON, attempting manual parsing");
+                    return ParseQuizManually(cleanJson);
+                }
+
+                _logger.LogInformation("Successfully parsed {QuestionCount} questions", quizData.questions.Length);
+                return quizData.questions;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to parse quiz JSON, using fallback parsing");
-                return CreateFallbackQuiz();
+                _logger.LogWarning(ex, "Failed to parse quiz JSON: {JsonContent}", jsonContent);
+                return ParseQuizManually(jsonContent);
             }
         }
+
+        private QuizQuestion[] ParseQuizManually(string content)
+        {
+            try
+            {
+                _logger.LogInformation("Attempting manual quiz parsing");
+
+
+                var questions = new List<QuizQuestion>();
+
+
+                var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                QuizQuestion? currentQuestion = null;
+                var options = new List<string>();
+
+                foreach (var line in lines)
+                {
+                    var trimmed = line.Trim();
+
+
+                    if (trimmed.Contains("?") && !trimmed.StartsWith("[") && !trimmed.StartsWith("A.") &&
+                        !trimmed.StartsWith("B.") && !trimmed.StartsWith("C.") && !trimmed.StartsWith("D."))
+                    {
+
+                        if (currentQuestion != null && options.Count >= 4)
+                        {
+                            currentQuestion.Options = options.Take(4).ToArray();
+                            questions.Add(currentQuestion);
+                        }
+
+                        currentQuestion = new QuizQuestion
+                        {
+                            Question = trimmed,
+                            CorrectAnswer = 0,
+                            Explanation = "Explanation not provided"
+                        };
+                        options.Clear();
+                    }
+
+                    else if (trimmed.StartsWith("A.") || trimmed.StartsWith("B.") ||
+                             trimmed.StartsWith("C.") || trimmed.StartsWith("D.") ||
+                             (options.Count < 4 && trimmed.Length > 3))
+                    {
+                        var option = trimmed.StartsWith("A.") || trimmed.StartsWith("B.") ||
+                                   trimmed.StartsWith("C.") || trimmed.StartsWith("D.")
+                            ? trimmed.Substring(2).Trim()
+                            : trimmed;
+                        options.Add(option);
+                    }
+                }
+
+                if (currentQuestion != null && options.Count >= 4)
+                {
+                    currentQuestion.Options = options.Take(4).ToArray();
+                    questions.Add(currentQuestion);
+                }
+
+                if (questions.Any())
+                {
+                    _logger.LogInformation("Manual parsing extracted {QuestionCount} questions", questions.Count);
+                    return questions.ToArray();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Manual parsing failed");
+            }
+
+            return CreateFallbackQuiz();
+        }
+
         private static QuizQuestion[] CreateFallbackQuiz()
         {
             return new[]

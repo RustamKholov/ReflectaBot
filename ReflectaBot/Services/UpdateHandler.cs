@@ -657,11 +657,23 @@ namespace ReflectaBot.Services
             {
                 if (data.Contains(':'))
                 {
-                    var parts = data.Split(':', 2);
+                    var parts = data.Split(':');
                     var action = parts[0];
-                    var contentId = parts.Length > 1 ? parts[1] : "";
 
-                    await HandleContentAction(message, action, contentId, user);
+                    // Handle quiz answer callbacks: "answer:contentId:questionIndex:selectedAnswer"
+                    if (action == "answer" && parts.Length >= 4)
+                    {
+                        var contentId = parts[1];
+                        var questionIndex = int.Parse(parts[2]);
+                        var selectedAnswer = int.Parse(parts[3]);
+                        await HandleQuizAnswer(message, contentId, questionIndex, selectedAnswer, user);
+                    }
+                    // Handle other content actions: "action:contentId"
+                    else if (parts.Length >= 2)
+                    {
+                        var contentId = string.Join(":", parts.Skip(1)); // Rejoin in case contentId has colons
+                        await HandleContentAction(message, action, contentId, user);
+                    }
                 }
                 else
                 {
@@ -694,6 +706,8 @@ namespace ReflectaBot.Services
                     "quiz" => ProcessQuizRequest(message, cachedContent, user),
                     "save" => ProcessSaveRequest(message, cachedContent, user),
                     "similar" => ProcessSimilarRequest(message, cachedContent, user),
+                    "next_question" => HandleNextQuestion(message, contentId, user),
+                    "quiz_summary" => HandleQuizSummary(message, contentId, user),
                     _ => HandleUnknownAction(message, action, user)
                 });
             }
@@ -909,6 +923,218 @@ namespace ReflectaBot.Services
                 text: $"🤖 Unknown action: {action}\n\nPlease try again or return to the main menu.",
                 replyMarkup: GetMainMenuKeyboard()
             );
+        }
+
+        private async Task HandleQuizAnswer(Message message, string contentId, int questionIndex, int selectedAnswer, string user)
+        {
+            try
+            {
+                var cachedContent = await _contentCacheService.GetContentAsync(contentId);
+                if (cachedContent == null)
+                {
+                    await _bot.EditMessageText(
+                        chatId: message.Chat.Id,
+                        messageId: message.MessageId,
+                        text: "❌ Sorry, the quiz session has expired. Please generate a new quiz.",
+                        replyMarkup: GetMainMenuKeyboard()
+                    );
+                    return;
+                }
+
+                var quizResult = await CheckForExistingQuiz(cachedContent);
+                if (quizResult == null)
+                {
+                    _logger.LogWarning("No cached quiz found, regenerating for user {User}", user);
+                    quizResult = await GenerateAiQuiz(cachedContent);
+                    if (quizResult.Success)
+                    {
+                        await CacheQuizResult(cachedContent, quizResult);
+                    }
+                }
+
+                if (!quizResult.Success || questionIndex >= quizResult.Questions.Length)
+                {
+                    await DisplayQuizError(message, "Quiz questions not available", user);
+                    return;
+                }
+
+                var currentQuestion = quizResult.Questions[questionIndex];
+                var isCorrect = currentQuestion.CorrectAnswer == selectedAnswer;
+                var correctOption = (char)('A' + currentQuestion.CorrectAnswer);
+                var selectedOption = (char)('A' + selectedAnswer);
+
+                var resultText = $"🧠 **Quiz Answer for {user}**\n\n" +
+                                $"📄 **{EscapeMarkdown(cachedContent.Title)}**\n\n" +
+                                $"**Question {questionIndex + 1}:** {EscapeMarkdown(currentQuestion.Question)}\n\n" +
+                                $"**Your Answer:** {selectedOption}. {EscapeMarkdown(currentQuestion.Options[selectedAnswer])}\n" +
+                                $"**Correct Answer:** {correctOption}. {EscapeMarkdown(currentQuestion.Options[currentQuestion.CorrectAnswer])}\n\n" +
+                                (isCorrect ? "✅ **Correct!**" : "❌ **Incorrect**") + "\n\n" +
+                                $"💡 **Explanation:** {EscapeMarkdown(currentQuestion.Explanation)}";
+
+                var nextQuestionIndex = questionIndex + 1;
+                var isLastQuestion = nextQuestionIndex >= quizResult.Questions.Length;
+
+                InlineKeyboardMarkup keyboard;
+                if (isLastQuestion)
+                {
+                    keyboard = new InlineKeyboardMarkup(new[]
+                    {
+                        new[]
+                        {
+                            InlineKeyboardButton.WithCallbackData("🔄 Retry Quiz", $"quiz:{contentId}"),
+                            InlineKeyboardButton.WithCallbackData("📝 Get Summary", $"summary:{contentId}")
+                        },
+                        new[]
+                        {
+                            InlineKeyboardButton.WithCallbackData("💾 Save Article", $"save:{contentId}"),
+                            InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
+                        }
+                    });
+
+                    resultText += "\n\n🎉 **Quiz Completed!**\nGreat job working through all the questions!";
+                }
+                else
+                {
+                    keyboard = new InlineKeyboardMarkup(new[]
+                    {
+                        new[]
+                        {
+                            InlineKeyboardButton.WithCallbackData("➡️ Next Question", $"next_question:{contentId}:{nextQuestionIndex}")
+                        },
+                        new[]
+                        {
+                            InlineKeyboardButton.WithCallbackData("📊 Quiz Summary", $"quiz_summary:{contentId}"),
+                            InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
+                        }
+                    });
+                }
+
+                await _bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: message.MessageId,
+                    text: resultText,
+                    replyMarkup: keyboard,
+                    parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown
+                );
+
+                _logger.LogInformation("Quiz answer processed: {User} answered question {QuestionIndex} {Result}",
+                    user, questionIndex + 1, isCorrect ? "correctly" : "incorrectly");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling quiz answer for user {User}", user);
+                await DisplayQuizError(message, "Error processing quiz answer", user);
+            }
+        }
+
+        private async Task HandleNextQuestion(Message message, string contentId, string user)
+        {
+            try
+            {
+                var parts = contentId.Split(':');
+                var actualContentId = parts[0];
+                var questionIndex = parts.Length > 1 ? int.Parse(parts[1]) : 0;
+
+                var cachedContent = await _contentCacheService.GetContentAsync(actualContentId);
+                if (cachedContent == null)
+                {
+                    await DisplayQuizError(message, "Quiz session expired", user);
+                    return;
+                }
+
+                // Get cached quiz instead of regenerating
+                var quizResult = await CheckForExistingQuiz(cachedContent);
+                if (quizResult == null)
+                {
+                    await DisplayQuizError(message, "Quiz session expired - please generate a new quiz", user);
+                    return;
+                }
+
+                if (!quizResult.Success || questionIndex >= quizResult.Questions.Length)
+                {
+                    await DisplayQuizError(message, "Question not available", user);
+                    return;
+                }
+
+                var question = quizResult.Questions[questionIndex];
+                var questionText = $"🧠 **Knowledge Quiz for {user}**\n\n" +
+                                  $"📄 **{EscapeMarkdown(cachedContent.Title)}**\n\n" +
+                                  $"**Question {questionIndex + 1} of {quizResult.Questions.Length}:**\n" +
+                                  $"{EscapeMarkdown(question.Question)}\n\n" +
+                                  "Choose your answer:";
+
+                var optionButtons = question.Options.Select((option, index) =>
+                    new[] { InlineKeyboardButton.WithCallbackData($"{(char)('A' + index)}. {option}", $"answer:{actualContentId}:{questionIndex}:{index}") }
+                ).ToArray();
+
+                var controlButtons = new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("📊 Quiz Stats", $"quiz_summary:{actualContentId}"),
+                    InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
+                };
+
+                var keyboard = new InlineKeyboardMarkup(optionButtons.Append(controlButtons));
+
+                await _bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: message.MessageId,
+                    text: questionText,
+                    replyMarkup: keyboard,
+                    parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling next question for user {User}", user);
+                await DisplayQuizError(message, "Error loading next question", user);
+            }
+        }
+
+        private async Task HandleQuizSummary(Message message, string contentId, string user)
+        {
+            try
+            {
+                var cachedContent = await _contentCacheService.GetContentAsync(contentId);
+                if (cachedContent == null)
+                {
+                    await DisplayQuizError(message, "Content not found", user);
+                    return;
+                }
+
+                // TODO: Implement proper quiz statistics tracking
+                var summaryText = $"📊 **Quiz Summary for {user}**\n\n" +
+                                 $"📄 **{EscapeMarkdown(cachedContent.Title)}**\n\n" +
+                                 $"🎯 This quiz tests understanding of key concepts\n" +
+                                 $"📝 {cachedContent.WordCount} words of content analyzed\n\n" +
+                                 "*🚧 Detailed statistics coming soon with SQLite database!*";
+
+                var keyboard = new InlineKeyboardMarkup(new[]
+                {
+                    new[]
+                    {
+                        InlineKeyboardButton.WithCallbackData("🔄 Restart Quiz", $"quiz:{contentId}"),
+                        InlineKeyboardButton.WithCallbackData("📝 Get Summary", $"summary:{contentId}")
+                    },
+                    new[]
+                    {
+                        InlineKeyboardButton.WithCallbackData("💾 Save Article", $"save:{contentId}"),
+                        InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
+                    }
+                });
+
+                await _bot.EditMessageText(
+                    chatId: message.Chat.Id,
+                    messageId: message.MessageId,
+                    text: summaryText,
+                    replyMarkup: keyboard,
+                    parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error showing quiz summary for user {User}", user);
+                await DisplayQuizError(message, "Error loading quiz summary", user);
+            }
         }
         private async Task DisplaySummaryResult(Message message, AISummaryResult summaryResult, ProcessedContent content, string user)
         {
@@ -1336,22 +1562,84 @@ namespace ReflectaBot.Services
 
         private async Task<AIQuizResult?> CheckForExistingQuiz(ProcessedContent content)
         {
-            // TODO: Implement quiz caching with database
+            try
+            {
+                var quizCacheKey = $"quiz_{GenerateContentHash(content.Content)}";
+                var cachedQuizContent = await _contentCacheService.GetContentAsync(quizCacheKey);
+
+                if (cachedQuizContent != null && !string.IsNullOrEmpty(cachedQuizContent.Content))
+                {
+                    var quizResult = System.Text.Json.JsonSerializer.Deserialize<AIQuizResult>(cachedQuizContent.Content);
+                    _logger.LogInformation("Using cached quiz for content to optimize costs");
+                    return quizResult;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error checking for existing quiz cache");
+            }
+
             return null;
         }
 
-
         private async Task CacheSummaryResult(ProcessedContent content, AISummaryResult summary)
         {
-            // TODO: Implement summary caching with  database
-            _logger.LogDebug("Caching summary result for content: {Title}", content.Title);
-        }
+            try
+            {
+                var summaryCacheKey = $"summary_{GenerateContentHash(content.Content)}";
+                var summaryJson = System.Text.Json.JsonSerializer.Serialize(summary);
 
+                var cacheContent = new ProcessedContent
+                {
+                    Title = $"Summary Cache - {content.Title}",
+                    Content = summaryJson,
+                    SourceType = ContentSourceType.PlainText,
+                    WordCount = summaryJson.Length / 5,
+                    Success = true,
+                    ProcessedAt = DateTime.UtcNow
+                };
+
+                await _contentCacheService.CacheContentAsync(cacheContent);
+                _logger.LogDebug("Cached summary result for content: {Title}", content.Title);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error caching summary result");
+            }
+        }
 
         private async Task CacheQuizResult(ProcessedContent content, AIQuizResult quiz)
         {
-            // TODO: Implement quiz caching with  database
-            _logger.LogDebug("Caching quiz result for content: {Title}", content.Title);
+            try
+            {
+                var quizCacheKey = $"quiz_{GenerateContentHash(content.Content)}";
+                var quizJson = System.Text.Json.JsonSerializer.Serialize(quiz);
+
+                var cacheContent = new ProcessedContent
+                {
+                    Title = $"Quiz Cache - {content.Title}",
+                    Content = quizJson,
+                    SourceType = ContentSourceType.PlainText,
+                    WordCount = quizJson.Length / 5,
+                    Success = true,
+                    ProcessedAt = DateTime.UtcNow
+                };
+
+                await _contentCacheService.CacheContentAsync(cacheContent);
+                _logger.LogDebug("Cached quiz result for content: {Title}", content.Title);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error caching quiz result");
+            }
+        }
+
+
+        private static string GenerateContentHash(string content)
+        {
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            var hash = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(content));
+            return Convert.ToBase64String(hash)[..16];
         }
 
         private static int EstimateTokenUsage(string text)
