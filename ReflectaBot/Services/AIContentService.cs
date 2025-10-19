@@ -36,8 +36,7 @@ namespace ReflectaBot.Services
             {
                 _logger.LogInformation("Generating AI summary for content: {WordCount} words", content.WordCount);
 
-                var optimizedContent = OptimizeContentForAI(content.Content, maxTokens: 2000);
-                var estimatedTokens = EstimateTokenUsage(optimizedContent);
+                var estimatedTokens = EstimateTokenUsage(content.Content);
 
                 var prompt = $"""
                     Generate a concise, 3-bullet point summary of the following text.
@@ -45,7 +44,7 @@ namespace ReflectaBot.Services
                     Keep each bullet point under 50 words.
 
                     Text:
-                    {optimizedContent}
+                    {content.Content}
                     """;
 
                 var response = await CallOpenAIAsync(prompt, maxTokens: 200, cancellationToken);
@@ -89,8 +88,7 @@ namespace ReflectaBot.Services
             {
                 _logger.LogInformation("Generating AI quiz for content: {WordCount} words", content.WordCount);
 
-                var optimizedContent = OptimizeContentForAI(content.Content, maxTokens: 2500);
-                var estimatedTokens = EstimateTokenUsage(optimizedContent);
+                var estimatedTokens = EstimateTokenUsage(content.Content);
 
                 var prompt = """
                     Analyze the following text and create exactly 3 multiple-choice questions to test understanding of the key concepts.
@@ -122,7 +120,7 @@ namespace ReflectaBot.Services
                     }
 
                     Text to analyze:
-                    """ + optimizedContent;
+                    """ + content.Content;
 
                 var response = await CallOpenAIAsync(prompt, maxTokens: 800, cancellationToken);
 
@@ -222,25 +220,6 @@ namespace ReflectaBot.Services
             }
         }
 
-
-        private static string OptimizeContentForAI(string content, int maxTokens)
-        {
-            var estimatedTokens = EstimateTokenUsage(content);
-
-            if (estimatedTokens <= maxTokens)
-                return content;
-
-            var targetLength = maxTokens * 4;
-            var halfLength = targetLength / 2;
-
-            if (content.Length <= targetLength)
-                return content;
-
-            var firstPart = content.Substring(0, halfLength);
-            var lastPart = content.Substring(content.Length - halfLength);
-
-            return $"{firstPart}\n\n[... content truncated ...]\n\n{lastPart}";
-        }
 
         private static string FormatSummaryBullets(string summary)
         {

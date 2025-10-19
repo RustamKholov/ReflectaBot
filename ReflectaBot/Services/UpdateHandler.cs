@@ -685,9 +685,29 @@ namespace ReflectaBot.Services
         {
             try
             {
-                var cachedContent = await _contentCacheService.GetContentAsync(contentId);
+                string actualContentId;
+
+                if (action == "next_question" && contentId.Contains(':'))
+                {
+                    var parts = contentId.Split(':');
+                    actualContentId = parts[0];
+                    var questionIndex = parts.Length > 1 ? int.Parse(parts[1]) : 0;
+
+                    _logger.LogDebug("Next question request - ContentId: {ContentId}, QuestionIndex: {QuestionIndex}",
+                        actualContentId, questionIndex);
+
+                    await HandleNextQuestion(message, actualContentId, questionIndex, user);
+                    return;
+                }
+                else
+                {
+                    actualContentId = contentId;
+                }
+
+                var cachedContent = await _contentCacheService.GetContentAsync(actualContentId);
                 if (cachedContent == null)
                 {
+                    _logger.LogWarning("Content not found for action '{Action}', ContentId: {ContentId}", action, actualContentId);
                     await _bot.EditMessageText(
                         chatId: message.Chat.Id,
                         messageId: message.MessageId,
@@ -706,8 +726,7 @@ namespace ReflectaBot.Services
                     "quiz" => ProcessQuizRequest(message, cachedContent, user),
                     "save" => ProcessSaveRequest(message, cachedContent, user),
                     "similar" => ProcessSimilarRequest(message, cachedContent, user),
-                    "next_question" => HandleNextQuestion(message, contentId, user),
-                    "quiz_summary" => HandleQuizSummary(message, contentId, user),
+                    "quiz_summary" => HandleQuizSummary(message, actualContentId, user),
                     _ => HandleUnknownAction(message, action, user)
                 });
             }
@@ -929,9 +948,13 @@ namespace ReflectaBot.Services
         {
             try
             {
+                _logger.LogDebug("Processing quiz answer - ContentId: {ContentId}, Question: {QuestionIndex}, Answer: {SelectedAnswer}",
+                    contentId, questionIndex, selectedAnswer);
+
                 var cachedContent = await _contentCacheService.GetContentAsync(contentId);
                 if (cachedContent == null)
                 {
+                    _logger.LogWarning("Content not found for quiz answer: {ContentId}", contentId);
                     await _bot.EditMessageText(
                         chatId: message.Chat.Id,
                         messageId: message.MessageId,
@@ -941,24 +964,39 @@ namespace ReflectaBot.Services
                     return;
                 }
 
-                var quizResult = await CheckForExistingQuiz(cachedContent);
-                if (quizResult == null)
+                var quizResult = await GetQuizByContentId(contentId);
+                if (quizResult == null || !quizResult.Success)
                 {
-                    _logger.LogWarning("No cached quiz found, regenerating for user {User}", user);
+                    _logger.LogWarning("Quiz not found for answer processing, regenerating for content: {ContentId}", contentId);
+
                     quizResult = await GenerateAiQuiz(cachedContent);
                     if (quizResult.Success)
                     {
                         await CacheQuizResult(cachedContent, quizResult);
                     }
+                    else
+                    {
+                        await DisplayQuizError(message, "Quiz questions not available", user);
+                        return;
+                    }
                 }
 
-                if (!quizResult.Success || questionIndex >= quizResult.Questions.Length)
+                if (questionIndex >= quizResult.Questions.Length)
                 {
-                    await DisplayQuizError(message, "Quiz questions not available", user);
+                    _logger.LogWarning("Invalid question index for answer: {QuestionIndex}", questionIndex);
+                    await DisplayQuizError(message, "Question not found", user);
                     return;
                 }
 
                 var currentQuestion = quizResult.Questions[questionIndex];
+                if (selectedAnswer >= currentQuestion.Options.Length)
+                {
+                    _logger.LogWarning("Invalid answer index: {SelectedAnswer} for question with {OptionCount} options",
+                        selectedAnswer, currentQuestion.Options.Length);
+                    await DisplayQuizError(message, "Invalid answer selection", user);
+                    return;
+                }
+
                 var isCorrect = currentQuestion.CorrectAnswer == selectedAnswer;
                 var correctOption = (char)('A' + currentQuestion.CorrectAnswer);
                 var selectedOption = (char)('A' + selectedAnswer);
@@ -979,17 +1017,17 @@ namespace ReflectaBot.Services
                 {
                     keyboard = new InlineKeyboardMarkup(new[]
                     {
-                        new[]
-                        {
-                            InlineKeyboardButton.WithCallbackData("🔄 Retry Quiz", $"quiz:{contentId}"),
-                            InlineKeyboardButton.WithCallbackData("📝 Get Summary", $"summary:{contentId}")
-                        },
-                        new[]
-                        {
-                            InlineKeyboardButton.WithCallbackData("💾 Save Article", $"save:{contentId}"),
-                            InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
-                        }
-                    });
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("🔄 Retry Quiz", $"quiz:{contentId}"),
+                    InlineKeyboardButton.WithCallbackData("📝 Get Summary", $"summary:{contentId}")
+                },
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("💾 Save Article", $"save:{contentId}"),
+                    InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
+                }
+            });
 
                     resultText += "\n\n🎉 **Quiz Completed!**\nGreat job working through all the questions!";
                 }
@@ -997,16 +1035,16 @@ namespace ReflectaBot.Services
                 {
                     keyboard = new InlineKeyboardMarkup(new[]
                     {
-                        new[]
-                        {
-                            InlineKeyboardButton.WithCallbackData("➡️ Next Question", $"next_question:{contentId}:{nextQuestionIndex}")
-                        },
-                        new[]
-                        {
-                            InlineKeyboardButton.WithCallbackData("📊 Quiz Summary", $"quiz_summary:{contentId}"),
-                            InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
-                        }
-                    });
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("➡️ Next Question", $"next_question:{contentId}:{nextQuestionIndex}")
+                },
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData("📊 Quiz Summary", $"quiz_summary:{contentId}"),
+                    InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
+                }
+            });
                 }
 
                 await _bot.EditMessageText(
@@ -1017,7 +1055,7 @@ namespace ReflectaBot.Services
                     parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown
                 );
 
-                _logger.LogInformation("Quiz answer processed: {User} answered question {QuestionIndex} {Result}",
+                _logger.LogInformation("Quiz answer processed successfully: {User} answered question {QuestionNumber} {Result}",
                     user, questionIndex + 1, isCorrect ? "correctly" : "incorrectly");
             }
             catch (Exception ex)
@@ -1027,31 +1065,43 @@ namespace ReflectaBot.Services
             }
         }
 
-        private async Task HandleNextQuestion(Message message, string contentId, string user)
+        private async Task HandleNextQuestion(Message message, string contentId, int questionIndex, string user)
         {
             try
             {
-                var parts = contentId.Split(':');
-                var actualContentId = parts[0];
-                var questionIndex = parts.Length > 1 ? int.Parse(parts[1]) : 0;
+                _logger.LogDebug("Loading next question - ContentId: {ContentId}, QuestionIndex: {QuestionIndex}",
+                    contentId, questionIndex);
 
-                var cachedContent = await _contentCacheService.GetContentAsync(actualContentId);
+                var cachedContent = await _contentCacheService.GetContentAsync(contentId);
                 if (cachedContent == null)
                 {
-                    await DisplayQuizError(message, "Quiz session expired", user);
+                    _logger.LogWarning("Original content not found for ID: {ContentId}", contentId);
+                    await DisplayQuizError(message, "Quiz session expired - content not found", user);
                     return;
                 }
 
-                // Get cached quiz instead of regenerating
-                var quizResult = await CheckForExistingQuiz(cachedContent);
-                if (quizResult == null)
+                var quizResult = await GetQuizByContentId(contentId);
+                if (quizResult == null || !quizResult.Success)
                 {
-                    await DisplayQuizError(message, "Quiz session expired - please generate a new quiz", user);
-                    return;
+                    _logger.LogWarning("Cached quiz not found for content ID: {ContentId}, regenerating...", contentId);
+
+                    quizResult = await GenerateAiQuiz(cachedContent);
+                    if (quizResult.Success)
+                    {
+                        await CacheQuizResult(cachedContent, quizResult);
+                    }
+                    else
+                    {
+                        await DisplayQuizError(message, "Failed to load quiz questions", user);
+                        return;
+                    }
                 }
 
-                if (!quizResult.Success || questionIndex >= quizResult.Questions.Length)
+                // Validate question index
+                if (questionIndex >= quizResult.Questions.Length)
                 {
+                    _logger.LogWarning("Invalid question index: {QuestionIndex} for quiz with {QuestionCount} questions",
+                        questionIndex, quizResult.Questions.Length);
                     await DisplayQuizError(message, "Question not available", user);
                     return;
                 }
@@ -1064,14 +1114,16 @@ namespace ReflectaBot.Services
                                   "Choose your answer:";
 
                 var optionButtons = question.Options.Select((option, index) =>
-                    new[] { InlineKeyboardButton.WithCallbackData($"{(char)('A' + index)}. {option}", $"answer:{actualContentId}:{questionIndex}:{index}") }
+                    new[] { InlineKeyboardButton.WithCallbackData(
+                $"{(char)('A' + index)}. {option}",
+                $"answer:{contentId}:{questionIndex}:{index}") }
                 ).ToArray();
 
                 var controlButtons = new[]
                 {
-                    InlineKeyboardButton.WithCallbackData("📊 Quiz Stats", $"quiz_summary:{actualContentId}"),
-                    InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
-                };
+            InlineKeyboardButton.WithCallbackData("📊 Quiz Stats", $"quiz_summary:{contentId}"),
+            InlineKeyboardButton.WithCallbackData("🔙 Main Menu", "main_menu")
+        };
 
                 var keyboard = new InlineKeyboardMarkup(optionButtons.Append(controlButtons));
 
@@ -1082,10 +1134,12 @@ namespace ReflectaBot.Services
                     replyMarkup: keyboard,
                     parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown
                 );
+
+                _logger.LogInformation("Successfully loaded question {QuestionIndex} for user {User}", questionIndex + 1, user);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error handling next question for user {User}", user);
+                _logger.LogError(ex, "Error handling next question for user {User}, contentId: {ContentId}", user, contentId);
                 await DisplayQuizError(message, "Error loading next question", user);
             }
         }
@@ -1564,22 +1618,26 @@ namespace ReflectaBot.Services
         {
             try
             {
-                var quizCacheKey = $"quiz_{GenerateContentHash(content.Content)}";
-                var cachedQuizContent = await _contentCacheService.GetContentAsync(quizCacheKey);
+                var contentHash = GenerateContentHash(content.Content);
+                var quizCacheKey = $"quiz_{contentHash}";
 
-                if (cachedQuizContent != null && !string.IsNullOrEmpty(cachedQuizContent.Content))
+                _logger.LogDebug("Checking for cached quiz with key: {CacheKey}", quizCacheKey);
+
+                var allCachedItems = await GetCachedQuizByHash(contentHash);
+                if (allCachedItems != null)
                 {
-                    var quizResult = System.Text.Json.JsonSerializer.Deserialize<AIQuizResult>(cachedQuizContent.Content);
-                    _logger.LogInformation("Using cached quiz for content to optimize costs");
-                    return quizResult;
+                    _logger.LogInformation("Found cached quiz with {QuestionCount} questions", allCachedItems.Questions?.Length ?? 0);
+                    return allCachedItems;
                 }
+
+                _logger.LogDebug("No valid cached quiz found for hash: {ContentHash}", contentHash);
+                return null;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error checking for existing quiz cache");
+                _logger.LogError(ex, "Error checking for existing quiz cache");
+                return null;
             }
-
-            return null;
         }
 
         private async Task CacheSummaryResult(ProcessedContent content, AISummaryResult summary)
@@ -1607,44 +1665,145 @@ namespace ReflectaBot.Services
                 _logger.LogWarning(ex, "Error caching summary result");
             }
         }
+        private async Task<AIQuizResult?> GetCachedQuizByHash(string contentHash)
+        {
+            try
+            {
+                var deterministicQuizId = $"QUIZ{contentHash}";
+
+                var cachedQuizContent = await _contentCacheService.GetContentAsync(deterministicQuizId);
+
+                if (cachedQuizContent != null && !string.IsNullOrEmpty(cachedQuizContent.Content))
+                {
+                    try
+                    {
+                        var quizResult = System.Text.Json.JsonSerializer.Deserialize<AIQuizResult>(cachedQuizContent.Content);
+                        if (quizResult?.Success == true && quizResult.Questions?.Length > 0)
+                        {
+                            return quizResult;
+                        }
+                    }
+                    catch (System.Text.Json.JsonException ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to deserialize cached quiz");
+                        await _contentCacheService.RemoveAsync(deterministicQuizId);
+                    }
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving cached quiz by hash: {ContentHash}", contentHash);
+                return null;
+            }
+        }
 
         private async Task CacheQuizResult(ProcessedContent content, AIQuizResult quiz)
         {
             try
             {
-                var quizCacheKey = $"quiz_{GenerateContentHash(content.Content)}";
-                var quizJson = System.Text.Json.JsonSerializer.Serialize(quiz);
+                var contentHash = GenerateContentHash(content.Content);
+                var deterministicQuizId = $"QUIZ{contentHash}";
+
+                var quizJson = System.Text.Json.JsonSerializer.Serialize(quiz, new System.Text.Json.JsonSerializerOptions
+                {
+                    WriteIndented = false
+                });
 
                 var cacheContent = new ProcessedContent
                 {
                     Title = $"Quiz Cache - {content.Title}",
                     Content = quizJson,
                     SourceType = ContentSourceType.PlainText,
-                    WordCount = quizJson.Length / 5,
+                    WordCount = quiz.Questions?.Length ?? 0,
                     Success = true,
-                    ProcessedAt = DateTime.UtcNow
+                    ProcessedAt = DateTime.UtcNow,
+                    Metadata = new ProcessingMetadata
+                    {
+                        ProcessorUsed = "QuizCache",
+                        Domain = contentHash
+                    }
                 };
 
-                await _contentCacheService.CacheContentAsync(cacheContent);
-                _logger.LogDebug("Cached quiz result for content: {Title}", content.Title);
+                await CacheWithDeterministicId(cacheContent, deterministicQuizId);
+
+                _logger.LogInformation("Successfully cached quiz with deterministic ID: {QuizId}, Questions: {QuestionCount}",
+                    deterministicQuizId, quiz.Questions?.Length ?? 0);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error caching quiz result");
+                _logger.LogError(ex, "Error caching quiz result for content: {Title}", content.Title);
             }
+        }
+
+        private async Task CacheWithDeterministicId(ProcessedContent content, string deterministicId)
+        {
+            var cachedId = await _contentCacheService.CacheContentAsync(content);
+            _logger.LogDebug("Cached quiz content with generated ID: {GeneratedId}, wanted: {DeterministicId}",
+                cachedId, deterministicId);
         }
 
 
         private static string GenerateContentHash(string content)
         {
+            if (string.IsNullOrEmpty(content))
+                return "empty";
+
             using var sha256 = System.Security.Cryptography.SHA256.Create();
-            var hash = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(content));
+            var hash = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(content.Trim()));
             return Convert.ToBase64String(hash)[..16];
         }
 
-        private static int EstimateTokenUsage(string text)
+        private async Task<AIQuizResult?> GetQuizByContentId(string contentId)
         {
-            return (int)Math.Ceiling(text.Length / 4.0);
+            try
+            {
+                var content = await _contentCacheService.GetContentAsync(contentId);
+                if (content == null)
+                {
+                    _logger.LogWarning("Content not found for ID: {ContentId}", contentId);
+                    return null;
+                }
+
+                var contentHash = GenerateContentHash(content.Content);
+
+                var cacheAttempts = new[]
+                {
+            $"quiz_{contentHash}",
+            $"QUIZ{contentHash}",
+            contentHash
+        };
+
+                foreach (var cacheKey in cacheAttempts)
+                {
+                    try
+                    {
+                        var cachedContent = await _contentCacheService.GetContentAsync(cacheKey);
+                        if (cachedContent?.Content != null && cachedContent.Metadata?.ProcessorUsed == "QuizCache")
+                        {
+                            var quizResult = System.Text.Json.JsonSerializer.Deserialize<AIQuizResult>(cachedContent.Content);
+                            if (quizResult?.Success == true && quizResult.Questions?.Length > 0)
+                            {
+                                _logger.LogInformation("Found cached quiz using key: {CacheKey}", cacheKey);
+                                return quizResult;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Cache lookup failed for key: {CacheKey}", cacheKey);
+                    }
+                }
+
+                _logger.LogDebug("No cached quiz found for content ID: {ContentId}", contentId);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving quiz for content ID: {ContentId}", contentId);
+                return null;
+            }
         }
         #endregion
     }
